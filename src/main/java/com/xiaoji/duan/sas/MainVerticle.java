@@ -942,18 +942,58 @@ public class MainVerticle extends AbstractVerticle {
 					datas = converted;
 				}
 				
-				JsonObject nextctx = new JsonObject().put("context", new JsonObject()
-						.put("from", from)
-						.put("header", header)
-						.put("datas", datas));
-				
-				MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-				producer.send(new JsonObject().put("body", nextctx));
-				producer.end();
-
-				System.out.println(
-						"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
-
+				// 超过10条分多次返回
+				if (datas != null && datas.size() > 10) {
+					Iterator<Object> itdata = datas.iterator();
+					JsonArray subdatas = new JsonArray();
+					while (itdata.hasNext()) {
+						
+						if (subdatas.size() < 10) {
+							subdatas.add((JsonObject) itdata.next());
+						} else {
+							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
+									.put("from", from)
+									.put("header", header)
+									.put("datas", subdatas));
+							
+							MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+							producer.send(new JsonObject().put("body", nextctx));
+							producer.end();
+							
+							System.out.println(
+									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+							
+							subdatas = new JsonArray();
+						}
+					}
+					
+					if (subdatas.size() > 0) {
+						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+								.put("from", from)
+								.put("header", header)
+								.put("datas", subdatas));
+						
+						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+						producer.send(new JsonObject().put("body", nextctx));
+						producer.end();
+						
+						System.out.println(
+								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+						
+					}
+				} else {
+					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+							.put("from", from)
+							.put("header", header)
+							.put("datas", datas));
+					
+					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+					producer.send(new JsonObject().put("body", nextctx));
+					producer.end();
+					
+					System.out.println(
+							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+				}
 			}
 		});
 	}
