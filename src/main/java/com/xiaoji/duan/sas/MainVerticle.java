@@ -9,7 +9,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
+
+import org.apache.commons.lang3.StringUtils;
 
 import io.vertx.amqpbridge.AmqpBridge;
 import io.vertx.core.AbstractVerticle;
@@ -67,17 +70,116 @@ public class MainVerticle extends AbstractVerticle {
 		JsonArray request = data.getJsonObject("context").getJsonArray("data", new JsonArray());
 		String next = data.getJsonObject("context").getString("next");
 
+		// 客户端上传数据
 		if ("push".equals(type)) {
 			push(consumer, from, header, request, next);
 		}
 		
+		// 客户端拉取数据请求
 		if ("pull".equals(type)) {
 			pull(consumer, from, header, datatype, request, next);
 		}
 
+		// 复制数据到用户设备
 		if ("copy".equals(type)) {
 			copy(consumer, from, to, copyto, header, request, next);
 		}
+		
+		// 获取最新数据详情
+		if ("fetch".equals(type)) {
+			fetch(consumer, datatype, request, next);
+		}
+	}
+	
+	private void fetch(String consumer, String datatype, JsonArray datas, String next) {
+		String collection = "sas_" + datatype.toLowerCase();
+
+		JsonObject identifies = new JsonObject();
+		
+		Iterator dataits = datas.iterator();
+		
+		JsonArray filters = new JsonArray();
+		while(dataits.hasNext()) {
+			JsonObject data = (JsonObject) dataits.next();
+			
+			String phoneno = data.getString("phoneno");
+			String dataid = data.getString("id");
+			
+			if (StringUtils.isEmpty(phoneno) || StringUtils.isEmpty(dataid)) {
+				continue;
+			}
+			
+			String extendid = phoneno + "_" + dataid;
+			
+			filters.add(new JsonObject().put("_id", extendid));
+		}
+		
+		if (filters.size() > 0) {	// 存在查询条件
+			
+			identifies.put("$or", filters);
+			
+			mongodb.find(collection, identifies, find -> {
+				if (find.succeeded()) {
+					List<JsonObject> results = find.result();
+					
+					JsonArray outputs = new JsonArray();
+					
+					for (JsonObject data : results) {
+						// 转换数据格式
+						JsonObject converted = new JsonObject();
+						
+						converted.put("exchangeno", data.getString("_exchangephoneno"));
+						converted.put("src", data.getString("_datasrc"));
+						converted.put("id", data.getString("_dataid"));
+						converted.put("type", data.getString("_datatype"));
+						converted.put("title", data.getString("_datatitle"));
+						converted.put("datetime", data.getString("_datadatetime"));
+						converted.put("main", data.getBoolean("_datamain"));
+						converted.put("to", data.getJsonArray("_sharemembers"));
+						converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
+						converted.put("security", data.getString("_sharemethod"));
+						converted.put("status", data.getString("_datastate"));
+						converted.put("timestamp", data.getLong("_clienttimestamp"));
+						converted.put("payload", data.getJsonObject("payload"));
+	
+						outputs.add(converted);
+					}
+					
+					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+							.put("datas", outputs));
+					
+					MessageProducer<JsonObject> producer = bridge.createProducer(next);
+					producer.send(new JsonObject().put("body", nextctx));
+					producer.end();
+
+					System.out.println(
+							"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+				} else {	// 查询失败
+					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+							.put("datas", new JsonArray()));
+					
+					MessageProducer<JsonObject> producer = bridge.createProducer(next);
+					producer.send(new JsonObject().put("body", nextctx));
+					producer.end();
+
+					System.out.println(
+							"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+				}
+			});
+			
+		} else {	// 没有符合要求的检索条件
+			
+			JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+					.put("datas", new JsonArray()));
+			
+			MessageProducer<JsonObject> producer = bridge.createProducer(next);
+			producer.send(new JsonObject().put("body", nextctx));
+			producer.end();
+
+			System.out.println(
+					"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+		}
+		
 	}
 	
 	private void pushone(Future<JsonObject> endpointFuture, String from, String account, String device, JsonObject next) {
@@ -1015,6 +1117,33 @@ public class MainVerticle extends AbstractVerticle {
 				);
 
 		return merged;
+	}
+	
+	private JsonObject comparePayload(JsonObject origin, JsonObject current) {
+		JsonObject changes = new JsonObject();
+		
+		Set<String> fieldnames = origin.fieldNames();
+		
+		for (String fieldname : fieldnames) {
+			Object originvalue = origin.getValue(fieldname);
+			Object currentvalue = current.getValue(fieldname);
+			
+			if (originvalue != null) {
+				System.out.print(originvalue.toString());
+				System.out.print(currentvalue.toString());
+				// 两个值不相同
+				if (!originvalue.equals(currentvalue)) {
+					changes.put(fieldname, true);
+				}
+			} else {
+				// 现在的值不为null
+				if (currentvalue != null) {
+					changes.put(fieldname, true);
+				}
+			}
+		}
+		
+		return changes;
 	}
 	
 	private JsonObject mergePayload(JsonObject origin, JsonObject current, JsonObject fields, ExchangeMethod exchange) {
