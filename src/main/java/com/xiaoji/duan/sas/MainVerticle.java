@@ -636,6 +636,20 @@ public class MainVerticle extends AbstractVerticle {
 									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
 						}
 					}
+				} else {
+					JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+							.put("from", from)
+							.put("header", header)
+							.put("datas", datas));
+					
+					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+					producer.send(new JsonObject().put("body", nextctx));
+					producer.end();
+
+					if (config().getBoolean("log.info", Boolean.FALSE)) {
+						System.out.println(
+								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+					}
 				}
 			} else {
 				handler.cause().printStackTrace();
@@ -649,7 +663,7 @@ public class MainVerticle extends AbstractVerticle {
 				producer.send(new JsonObject().put("body", nextctx));
 				producer.end();
 
-				if (config().getBoolean("log.info", Boolean.FALSE)) {
+				if (config().getBoolean("log.info", Boolean.TRUE)) {
 					System.out.println(
 							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
 				}
