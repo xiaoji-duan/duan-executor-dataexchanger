@@ -52,12 +52,16 @@ public class MainVerticle extends AbstractVerticle {
 	
 	private void subscribeTrigger(String trigger) {
 		MessageConsumer<JsonObject> consumer = bridge.createConsumer(trigger);
-		System.out.println("Consumer " + trigger + " subscribed.");
+		if (config().getBoolean("log.info", Boolean.FALSE)) {
+			System.out.println("Consumer " + trigger + " subscribed.");
+		}
 		consumer.handler(vertxMsg -> this.process(trigger, vertxMsg));
 	}
 
 	private void process(String consumer, Message<JsonObject> received) {
-		System.out.println("Consumer " + consumer + " received [" + received.body().encode() + "]");
+		if (config().getBoolean("log.info", Boolean.FALSE)) {
+			System.out.println("Consumer " + consumer + " received [" + received.body().encode() + "]");
+		}
 
 		JsonObject data = received.body().getJsonObject("body");
 
@@ -162,8 +166,10 @@ public class MainVerticle extends AbstractVerticle {
 					producer.send(new JsonObject().put("body", nextctx));
 					producer.end();
 
-					System.out.println(
-							"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+					if (config().getBoolean("log.info", Boolean.FALSE)) {
+						System.out.println(
+								"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+					}
 				}
 			});
 			
@@ -176,8 +182,10 @@ public class MainVerticle extends AbstractVerticle {
 			producer.send(new JsonObject().put("body", nextctx));
 			producer.end();
 
-			System.out.println(
-					"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+			if (config().getBoolean("log.info", Boolean.FALSE)) {
+				System.out.println(
+						"Consumer " + consumer + " send to [" + next + "] result [" + nextctx.encode() + "]");
+			}
 		}
 		
 	}
@@ -233,7 +241,9 @@ public class MainVerticle extends AbstractVerticle {
 					if (hasCloudData) {
 						// 存在元数据
 						storage = existed.copy();
-						System.out.println("Sender pushed with storaged data.");
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println("Sender pushed with storaged data.");
+						}
 
 						storage.put("_deviceid", device);
 						storage.put("_datatitle", title);
@@ -284,7 +294,9 @@ public class MainVerticle extends AbstractVerticle {
 					if (hasCloudData) {
 						// 存在元数据
 						storage = existed.copy();
-						System.out.println("Member pushed with sender storaged data.");
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println("Member pushed with sender storaged data.");
+						}
 						
 						// 还原元数据的参与人
 						JsonArray reverseto = to.copy();
@@ -320,7 +332,9 @@ public class MainVerticle extends AbstractVerticle {
 					}
 					
 					JsonObject changed = compare(beforemembers, aftermembers);
-					System.out.println(changed.encodePrettily());
+					if (config().getBoolean("log.debug", Boolean.FALSE)) {
+						System.out.println(changed.encodePrettily());
+					}
 					
 					JsonArray added = changed.getJsonArray("added", new JsonArray());
 					JsonArray updated = changed.getJsonArray("updated", new JsonArray());
@@ -434,6 +448,8 @@ public class MainVerticle extends AbstractVerticle {
 				}
 
 			} else {
+				find.cause().printStackTrace();
+				
 				// 元数据查询失败
 				endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 			}
@@ -513,6 +529,8 @@ public class MainVerticle extends AbstractVerticle {
 						}
 
 						endpointFuture.complete(new JsonObject().put("datas", datas));
+					} else {
+						endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 					}
 				});
 			} else {
@@ -576,18 +594,65 @@ public class MainVerticle extends AbstractVerticle {
 							.put("datas", databyphone.get(key)));
 				}
 				
+				// 如果数据超过10条，需要分割处理
+				if (datas != null && datas.size() > 10) {
+					Iterator<Object> itdata = datas.iterator();
+					JsonArray subdatas = new JsonArray();
+					while (itdata.hasNext()) {
+						
+						if (subdatas.size() < 10) {
+							subdatas.add((JsonObject) itdata.next());
+						} else {
+							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
+									.put("from", from)
+									.put("header", header)
+									.put("datas", subdatas));
+							
+							MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+							producer.send(new JsonObject().put("body", nextctx));
+							producer.end();
+			
+							if (config().getBoolean("log.info", Boolean.FALSE)) {
+								System.out.println(
+										"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+							}
+
+							subdatas = new JsonArray();
+						}
+					}
+					
+					if (subdatas.size() > 0) {
+						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+								.put("from", from)
+								.put("header", header)
+								.put("datas", subdatas));
+						
+						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+						producer.send(new JsonObject().put("body", nextctx));
+						producer.end();
+		
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println(
+									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+						}
+					}
+				}
+			} else {
+				handler.cause().printStackTrace();
+				
 				JsonObject nextctx = new JsonObject().put("context", new JsonObject()
 						.put("from", from)
 						.put("header", header)
-						.put("datas", datas));
+						.put("datas", new JsonArray()));
 				
 				MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
 				producer.send(new JsonObject().put("body", nextctx));
 				producer.end();
 
-				System.out.println(
-						"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
-
+				if (config().getBoolean("log.info", Boolean.FALSE)) {
+					System.out.println(
+							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+				}
 			}
 		});
 	}
@@ -746,8 +811,10 @@ public class MainVerticle extends AbstractVerticle {
 			producer.send(new JsonObject().put("body", nextctx));
 			producer.end();
 
-			System.out.println(
-					"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+			if (config().getBoolean("log.info", Boolean.FALSE)) {
+				System.out.println(
+						"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+			}
 			
 			return;
 		}
@@ -805,8 +872,28 @@ public class MainVerticle extends AbstractVerticle {
 				producer.send(new JsonObject().put("body", nextctx));
 				producer.end();
 
-				System.out.println(
-						"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+				if (config().getBoolean("log.info", Boolean.FALSE)) {
+					System.out.println(
+							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+				}
+			} else {
+				handler.cause().printStackTrace();
+				
+				JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+						.put("from", from)
+						.put("to", to)
+						.put("copyto", copyto)
+						.put("header", header)
+						.put("datas", new JsonArray()));
+				
+				MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+				producer.send(new JsonObject().put("body", nextctx));
+				producer.end();
+
+				if (config().getBoolean("log.info", Boolean.FALSE)) {
+					System.out.println(
+							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+				}
 			}
 		});
 	}
@@ -1062,8 +1149,10 @@ public class MainVerticle extends AbstractVerticle {
 							producer.send(new JsonObject().put("body", nextctx));
 							producer.end();
 							
-							System.out.println(
-									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+							if (config().getBoolean("log.info", Boolean.FALSE)) {
+								System.out.println(
+										"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+							}
 							
 							subdatas = new JsonArray();
 						}
@@ -1079,9 +1168,10 @@ public class MainVerticle extends AbstractVerticle {
 						producer.send(new JsonObject().put("body", nextctx));
 						producer.end();
 						
-						System.out.println(
-								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
-						
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println(
+									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+						}						
 					}
 				} else {
 					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
@@ -1093,6 +1183,24 @@ public class MainVerticle extends AbstractVerticle {
 					producer.send(new JsonObject().put("body", nextctx));
 					producer.end();
 					
+					if (config().getBoolean("log.info", Boolean.FALSE)) {
+						System.out.println(
+								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+					}
+				}
+			} else {
+				handler.cause().printStackTrace();
+				
+				JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+						.put("from", from)
+						.put("header", header)
+						.put("datas", new JsonArray()));
+				
+				MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+				producer.send(new JsonObject().put("body", nextctx));
+				producer.end();
+				
+				if (config().getBoolean("log.info", Boolean.FALSE)) {
 					System.out.println(
 							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
 				}
@@ -1104,10 +1212,14 @@ public class MainVerticle extends AbstractVerticle {
 		JsonObject merged = new JsonObject();
 		
 		if (statement != null && !statement.isEmpty()) {
-			System.out.println(statement.encodePrettily());
+			if (config().getBoolean("log.debug", Boolean.FALSE)) {
+				System.out.println(statement.encodePrettily());
+			}
 			merged.mergeIn(statement, true);
 		} else {
-			System.out.println("Storaged statement is empty.");
+			if (config().getBoolean("log.info", Boolean.FALSE)) {
+				System.out.println("Storaged statement is empty.");
+			}
 		}
 		
 		merged.put(from, new JsonObject()
@@ -1257,7 +1369,9 @@ public class MainVerticle extends AbstractVerticle {
 						connectStompServer();
 					}
 				} else {
-					System.out.println("Stomp server connected.");
+					if (config().getBoolean("log.info", Boolean.FALSE)) {
+						System.out.println("Stomp server connected.");
+					}
 					subscribeTrigger(config().getString("amq.app.id", "sas"));
 				}
 			});
