@@ -595,12 +595,12 @@ public class MainVerticle extends AbstractVerticle {
 				}
 				
 				// 如果数据超过10条，需要分割处理
-				if (datas != null && datas.size() > 10) {
+				if (datas != null && datas.size() > 5) {
 					Iterator<Object> itdata = datas.iterator();
 					JsonArray subdatas = new JsonArray();
 					while (itdata.hasNext()) {
 						
-						if (subdatas.size() < 10) {
+						if (subdatas.size() < 5) {
 							subdatas.add((JsonObject) itdata.next());
 						} else {
 							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
@@ -875,20 +875,68 @@ public class MainVerticle extends AbstractVerticle {
 					datas.addAll(result.getJsonArray("datas", new JsonArray()));
 				}
 				
-				JsonObject nextctx = new JsonObject().put("context", new JsonObject()
-						.put("from", from)
-						.put("to", to)
-						.put("copyto", copyto)
-						.put("header", header)
-						.put("datas", datas));
-				
-				MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-				producer.send(new JsonObject().put("body", nextctx));
-				producer.end();
+				// 如果数据超过10条，需要分割处理
+				if (datas != null && datas.size() > 5) {
+					Iterator<Object> itdata = datas.iterator();
+					JsonArray subdatas = new JsonArray();
+					while (itdata.hasNext()) {
+						
+						if (subdatas.size() < 5) {
+							subdatas.add((JsonObject) itdata.next());
+						} else {
+							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
+									.put("from", from)
+									.put("to", to)
+									.put("copyto", copyto)
+									.put("header", header)
+									.put("datas", subdatas));
+							
+							MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+							producer.send(new JsonObject().put("body", nextctx));
+							producer.end();
+			
+							if (config().getBoolean("log.info", Boolean.FALSE)) {
+								System.out.println(
+										"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+							}
 
-				if (config().getBoolean("log.info", Boolean.FALSE)) {
-					System.out.println(
-							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+							subdatas = new JsonArray();
+						}
+					}
+					
+					if (subdatas.size() > 0) {
+						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+								.put("from", from)
+								.put("to", to)
+								.put("copyto", copyto)
+								.put("header", header)
+								.put("datas", subdatas));
+						
+						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+						producer.send(new JsonObject().put("body", nextctx));
+						producer.end();
+		
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println(
+									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+						}
+					}
+				} else {
+					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+							.put("from", from)
+							.put("to", to)
+							.put("copyto", copyto)
+							.put("header", header)
+							.put("datas", datas));
+					
+					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+					producer.send(new JsonObject().put("body", nextctx));
+					producer.end();
+	
+					if (config().getBoolean("log.info", Boolean.FALSE)) {
+						System.out.println(
+								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+					}
 				}
 			} else {
 				handler.cause().printStackTrace();
