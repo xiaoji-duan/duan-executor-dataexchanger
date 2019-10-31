@@ -1145,6 +1145,7 @@ public class MainVerticle extends AbstractVerticle {
 				// 拉取所有数据(本帐号与本设备差分数据和本设备既存数据)
 				List<String> types = new ArrayList<String>();
 				types.add("Plan");
+				types.add("Attachment");
 				types.add("PlanItem");
 				types.add("Agenda");
 				types.add("Task");
