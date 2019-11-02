@@ -206,6 +206,10 @@ public class MainVerticle extends AbstractVerticle {
 		JsonObject fields = next.getJsonObject("fields", new JsonObject());
 		JsonObject payload = next.getJsonObject("payload");
 	
+		if (config().getBoolean("log.debug", Boolean.FALSE)) {
+			System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " => " + to.toString());
+		}
+
 		String primaryid = src + "_" + id;		// 用于查询交换区元数据
 		String extendid = from + "_" + id;			// 用于存储交换区数据
 
@@ -223,7 +227,7 @@ public class MainVerticle extends AbstractVerticle {
 				Boolean selfpush = Boolean.FALSE;			// 是否本人数据更新
 				
 				// 交换区数据必须指定来源
-				if ("".equals(src) || src.equals(account)) {
+				if ("".equals(src) || account.equals(src)) {
 					selfpush = Boolean.TRUE;
 				}
 				
@@ -372,6 +376,10 @@ public class MainVerticle extends AbstractVerticle {
 						}
 						todata.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, exchange));
 						
+						if (config().getBoolean("log.debug", Boolean.FALSE)) {
+							System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " add " + addto);
+						}
+
 						forwards.add(todata);
 					}
 
@@ -404,6 +412,10 @@ public class MainVerticle extends AbstractVerticle {
 						}
 						todata.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, exchange));
 						
+						if (config().getBoolean("log.debug", Boolean.FALSE)) {
+							System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " update " + updateto);
+						}
+
 						forwards.add(todata);
 					}
 
@@ -437,6 +449,10 @@ public class MainVerticle extends AbstractVerticle {
 						}
 						todata.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, exchange));
 						
+						if (config().getBoolean("log.debug", Boolean.FALSE)) {
+							System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " remove " + removeto);
+						}
+
 						forwards.add(todata);
 					}
 					
@@ -444,10 +460,18 @@ public class MainVerticle extends AbstractVerticle {
 					savepush(endpointFuture, collection, storage, fields, forwards);
 				} else {
 					// 异常push
+					if (config().getBoolean("log.error", Boolean.TRUE)) {
+						System.out.println("异常push [" + type + "][" + id + "] "+ from + " => " + to);
+					}
+
 					endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 				}
 
 			} else {
+				if (config().getBoolean("log.error", Boolean.TRUE)) {
+					System.out.println("数据库查询失败 [" + type + "][" + id + "] "+ from + " => " + to);
+				}
+
 				find.cause().printStackTrace();
 				
 				// 元数据查询失败
@@ -574,6 +598,14 @@ public class MainVerticle extends AbstractVerticle {
 						JsonObject next = (JsonObject) it.next();
 						
 						String phoneno = next.getString("_exchangephoneno", "");
+						String type = next.getString("_datatype", "");
+						String src = next.getString("_datasrc", "");
+						String id = next.getString("_dataid", "");
+
+						if (config().getBoolean("log.debug", Boolean.FALSE)) {
+							System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " => " + phoneno);
+						}
+
 						if (!"".equals(phoneno)) {
 							JsonArray phonedatas = (JsonArray) databyphone.get(phoneno);
 							
@@ -595,34 +627,14 @@ public class MainVerticle extends AbstractVerticle {
 				}
 				
 				// 如果数据超过10条，需要分割处理
-				if (datas != null && datas.size() > 5) {
+//				if (datas != null && datas.size() > 5) {
 					Iterator<Object> itdata = datas.iterator();
 					JsonArray subdatas = new JsonArray();
 					while (itdata.hasNext()) {
 						
-						if (subdatas.size() < 5) {
-							subdatas.add((JsonObject) itdata.next());
-						} else {
-							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
-									.put("from", from)
-									.put("header", header)
-									.put("datas", subdatas));
-							
-							MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-							producer.send(new JsonObject().put("body", nextctx));
-							producer.end();
-			
-							if (config().getBoolean("log.info", Boolean.FALSE)) {
-								System.out.println(
-										"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
-							}
+						subdatas.add((JsonObject) itdata.next());
 
-							subdatas = new JsonArray();
-						}
-					}
-					
-					if (subdatas.size() > 0) {
-						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+						JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
 								.put("from", from)
 								.put("header", header)
 								.put("datas", subdatas));
@@ -635,22 +647,40 @@ public class MainVerticle extends AbstractVerticle {
 							System.out.println(
 									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
 						}
+	
+						subdatas = new JsonArray();
 					}
-				} else {
-					JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
-							.put("from", from)
-							.put("header", header)
-							.put("datas", datas));
 					
-					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-					producer.send(new JsonObject().put("body", nextctx));
-					producer.end();
-
-					if (config().getBoolean("log.info", Boolean.FALSE)) {
-						System.out.println(
-								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
-					}
-				}
+//					if (subdatas.size() > 0) {
+//						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+//								.put("from", from)
+//								.put("header", header)
+//								.put("datas", subdatas));
+//						
+//						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+//						producer.send(new JsonObject().put("body", nextctx));
+//						producer.end();
+//		
+//						if (config().getBoolean("log.info", Boolean.FALSE)) {
+//							System.out.println(
+//									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+//						}
+//					}
+//				} else {
+//					JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+//							.put("from", from)
+//							.put("header", header)
+//							.put("datas", datas));
+//					
+//					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+//					producer.send(new JsonObject().put("body", nextctx));
+//					producer.end();
+//
+//					if (config().getBoolean("log.info", Boolean.FALSE)) {
+//						System.out.println(
+//								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+//					}
+//				}
 			} else {
 				handler.cause().printStackTrace();
 				
@@ -682,6 +712,12 @@ public class MainVerticle extends AbstractVerticle {
 		if (force) {
 			mongodb.save(collection, data, saved -> {
 				if (saved.succeeded()) {
+					String src = data.getString("_datasrc", "");
+					
+					if (config().getBoolean("log.debug", Boolean.FALSE)) {
+						System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + to + " => " + deviceid);
+					}
+
 					// 转换数据格式
 					JsonObject converted = new JsonObject();
 					
@@ -716,6 +752,11 @@ public class MainVerticle extends AbstractVerticle {
 					if (existed != null && !existed.isEmpty()) {
 						mongodb.save(collection, data, saved -> {
 							if (saved.succeeded()) {
+								String src = data.getString("_datasrc", "");
+								
+								if (config().getBoolean("log.debug", Boolean.FALSE)) {
+									System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + to + " => " + deviceid);
+								}
 
 								// 转换数据格式
 								JsonObject converted = new JsonObject();
@@ -812,7 +853,7 @@ public class MainVerticle extends AbstractVerticle {
 	private void copy(String consumer, String from, String to, JsonObject copyto, JsonObject header, JsonArray data, String nextTask) {
 		
 		// 为查询到用户信息,非注册用户,忽略拷贝
-		if (copyto == null || copyto.isEmpty()) {
+		if (copyto == null || copyto.isEmpty() || data == null || data.size() <= 0) {
 			JsonObject nextctx = new JsonObject()
 					.put("context", new JsonObject()
 							.put("from", from)
@@ -860,6 +901,14 @@ public class MainVerticle extends AbstractVerticle {
 			Future<JsonObject> endpointFuture = Future.future();
 			compositeFutures.add(endpointFuture);
 
+			String type = next.getString("_datatype", "");
+			String src = next.getString("_datasrc", "");
+			String id = next.getString("_dataid", "");
+			
+			if (config().getBoolean("log.debug", Boolean.FALSE)) {
+				System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " copyto " + to + ":" +tophoneno);
+			}
+
 			copyone(endpointFuture, self, fromdeviceid, toaccountid, todevice, todevices, next);
 		}
 		
@@ -876,7 +925,7 @@ public class MainVerticle extends AbstractVerticle {
 				}
 				
 				// 如果数据超过10条，需要分割处理
-				if (datas != null && datas.size() > 5) {
+//				if (datas != null && datas.size() > 5) {
 					Iterator<Object> itdata = datas.iterator();
 					JsonArray subdatas = new JsonArray();
 					while (itdata.hasNext()) {
@@ -886,7 +935,7 @@ public class MainVerticle extends AbstractVerticle {
 						} else {
 							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
 									.put("from", from)
-									.put("to", to)
+									.put("to", tophoneno)
 									.put("copyto", copyto)
 									.put("header", header)
 									.put("datas", subdatas));
@@ -907,7 +956,7 @@ public class MainVerticle extends AbstractVerticle {
 					if (subdatas.size() > 0) {
 						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
 								.put("from", from)
-								.put("to", to)
+								.put("to", tophoneno)
 								.put("copyto", copyto)
 								.put("header", header)
 								.put("datas", subdatas));
@@ -921,29 +970,29 @@ public class MainVerticle extends AbstractVerticle {
 									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
 						}
 					}
-				} else {
-					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
-							.put("from", from)
-							.put("to", to)
-							.put("copyto", copyto)
-							.put("header", header)
-							.put("datas", datas));
-					
-					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-					producer.send(new JsonObject().put("body", nextctx));
-					producer.end();
-	
-					if (config().getBoolean("log.info", Boolean.FALSE)) {
-						System.out.println(
-								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
-					}
-				}
+//				} else {
+//					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
+//							.put("from", from)
+//							.put("to", to)
+//							.put("copyto", copyto)
+//							.put("header", header)
+//							.put("datas", datas));
+//					
+//					MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+//					producer.send(new JsonObject().put("body", nextctx));
+//					producer.end();
+//	
+//					if (config().getBoolean("log.info", Boolean.FALSE)) {
+//						System.out.println(
+//								"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "]");
+//					}
+//				}
 			} else {
 				handler.cause().printStackTrace();
 				
 				JsonObject nextctx = new JsonObject().put("context", new JsonObject()
 						.put("from", from)
-						.put("to", to)
+						.put("to", tophoneno)
 						.put("copyto", copyto)
 						.put("header", header)
 						.put("datas", new JsonArray()));
