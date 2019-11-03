@@ -249,6 +249,7 @@ public class MainVerticle extends AbstractVerticle {
 							System.out.println("Sender pushed with storaged data.");
 						}
 
+						storage.put("_operation", "owner_update");				// 本数据操作
 						storage.put("_deviceid", device);
 						storage.put("_datatitle", title);
 						storage.put("_datadatetime", datetime);
@@ -269,6 +270,7 @@ public class MainVerticle extends AbstractVerticle {
 						storage = new JsonObject();
 						
 						storage.put("_id", extendid);
+						storage.put("_operation", "new");				// 本数据操作
 						storage.put("_exchangephoneno", from);
 						storage.put("_primaryid", primaryid);
 						storage.put("_accountid", account);
@@ -307,6 +309,7 @@ public class MainVerticle extends AbstractVerticle {
 						reverseto.add(from);
 						reverseto.remove(storage.getString("_phoneno", ""));
 						
+						storage.put("_operation", "other_update");				// 本数据操作
 						storage.put("_datatitle", title);
 						storage.put("_datadatetime", datetime);
 						storage.put("_datamain", main);
@@ -359,6 +362,7 @@ public class MainVerticle extends AbstractVerticle {
 						todata.put("_exchangephoneno", addto);			// 交换区数据归属人手机号
 						todata.put("_datasrc", datasrc);				// 设置数据来源
 						todata.put("_sharemembers", members);			// 设置接收人
+						todata.put("_operation", "add");				// 本数据操作
 
 						ExchangeMethod exchange = null;
 						if (selfpush) {
@@ -395,7 +399,8 @@ public class MainVerticle extends AbstractVerticle {
 						todata.put("_exchangephoneno", updateto);		// 交换区数据归属人手机号
 						todata.put("_datasrc", datasrc);				// 设置数据来源
 						todata.put("_sharemembers", members);			// 设置接收人
-						
+						todata.put("_operation", "update");				// 本数据操作
+
 						ExchangeMethod exchange = null;
 						if (selfpush) {
 							if (from.equals(updateto)) {
@@ -432,7 +437,8 @@ public class MainVerticle extends AbstractVerticle {
 						todata.put("_datasrc", datasrc);				// 设置数据来源
 						todata.put("_datastate", "del");				// 标记为删除
 						todata.put("_sharemembers", members);			// 设置接收人
-						
+						todata.put("_operation", "remove");				// 本数据操作
+
 						ExchangeMethod exchange = null;
 						if (selfpush) {
 							if (from.equals(removeto)) {
@@ -727,6 +733,7 @@ public class MainVerticle extends AbstractVerticle {
 					converted.put("title", data.getString("_datatitle"));
 					converted.put("datetime", data.getString("_datadatetime"));
 					converted.put("main", data.getBoolean("_datamain"));
+					converted.put("operation", data.getString("_operation"));
 					converted.put("to", data.getJsonArray("_sharemembers"));
 					converted.put("todevice", deviceid);
 					converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
@@ -767,6 +774,7 @@ public class MainVerticle extends AbstractVerticle {
 								converted.put("title", data.getString("_datatitle"));
 								converted.put("datetime", data.getString("_datadatetime"));
 								converted.put("main", data.getBoolean("_datamain"));
+								converted.put("operation", data.getString("_operation"));
 								converted.put("to", data.getJsonArray("_sharemembers"));
 								converted.put("todevice", deviceid);
 								converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
@@ -1156,6 +1164,7 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("title", single.getString("_datatitle"));
 						converted.put("datetime", single.getString("_datadatetime"));
 						converted.put("main", single.getBoolean("_datamain"));
+						converted.put("operation", single.getString("_operation"));
 						converted.put("to", single.getJsonArray("_sharemembers"));
 						converted.put("sharestate", single.getJsonObject("_sharestate", new JsonObject()));
 						converted.put("security", single.getString("_sharemethod"));
