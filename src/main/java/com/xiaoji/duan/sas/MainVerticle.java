@@ -39,6 +39,7 @@ public class MainVerticle extends AbstractVerticle {
 		config.put("host", "mongodb");
 		config.put("port", 27017);
 		config.put("keepAlive", true);
+		config.put("maxWaitQueueSize", 3000);
 		mongodb = MongoClient.createShared(vertx, config);
 
 		bridge = AmqpBridge.create(vertx);
@@ -142,6 +143,7 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("to", data.getJsonArray("_sharemembers"));
 						converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
 						converted.put("security", data.getString("_sharemethod"));
+						converted.put("todostate", data.getString("_todostate"));
 						converted.put("status", data.getString("_datastate"));
 						converted.put("timestamp", data.getLong("_clienttimestamp"));
 						converted.put("payload", data.getJsonObject("payload"));
@@ -738,6 +740,7 @@ public class MainVerticle extends AbstractVerticle {
 					converted.put("todevice", deviceid);
 					converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
 					converted.put("security", data.getString("_sharemethod"));
+					converted.put("todostate", data.getString("_todostate"));
 					converted.put("status", data.getString("_datastate"));
 					converted.put("timestamp", data.getLong("_clienttimestamp"));
 					converted.put("payload", data.getJsonObject("payload"));
@@ -779,6 +782,7 @@ public class MainVerticle extends AbstractVerticle {
 								converted.put("todevice", deviceid);
 								converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
 								converted.put("security", data.getString("_sharemethod"));
+								converted.put("todostate", data.getString("_todostate"));
 								converted.put("status", data.getString("_datastate"));
 								converted.put("timestamp", data.getLong("_clienttimestamp"));
 								converted.put("payload", data.getJsonObject("payload"));
@@ -1168,6 +1172,7 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("to", single.getJsonArray("_sharemembers"));
 						converted.put("sharestate", single.getJsonObject("_sharestate", new JsonObject()));
 						converted.put("security", single.getString("_sharemethod"));
+						converted.put("todostate", single.getString("_todostate"));
 						converted.put("status", single.getString("_datastate"));
 						converted.put("timestamp", single.getLong("_clienttimestamp"));
 						converted.put("payload", single.getJsonObject("payload"));
@@ -1237,7 +1242,7 @@ public class MainVerticle extends AbstractVerticle {
 				}
 				
 				// 数据量大activemq无法承载
-				if (datas.size() > 10) {
+				if (datas.size() > 5) {
 					JsonArray converted = new JsonArray();
 
 					Iterator<Object> itdata = datas.iterator();
@@ -1253,12 +1258,12 @@ public class MainVerticle extends AbstractVerticle {
 				}
 				
 				// 超过10条分多次返回
-				if (datas != null && datas.size() > 10) {
+				if (datas != null && datas.size() > 5) {
 					Iterator<Object> itdata = datas.iterator();
 					JsonArray subdatas = new JsonArray();
 					while (itdata.hasNext()) {
 						
-						if (subdatas.size() < 10) {
+						if (subdatas.size() < 5) {
 							subdatas.add((JsonObject) itdata.next());
 						} else {
 							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
