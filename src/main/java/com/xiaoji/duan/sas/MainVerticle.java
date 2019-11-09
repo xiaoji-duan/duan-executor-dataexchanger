@@ -201,6 +201,7 @@ public class MainVerticle extends AbstractVerticle {
 		String title = next.getString("title", "");
 		String datetime = next.getString("datetime", "");
 		Boolean main = next.getBoolean("main", Boolean.FALSE);
+		Boolean parent = next.getBoolean("parent", Boolean.FALSE);
 		String group = next.getString("group", "");				// 2019/11/07 增加数据分组,用户减少参与人数据同步量
 		JsonArray to = next.getJsonArray("to", new JsonArray());
 		String security = next.getString("security", "Unkown");
@@ -241,6 +242,8 @@ public class MainVerticle extends AbstractVerticle {
 				Boolean hasChangedCompared = Boolean.TRUE;
 				// 判断是否修改了接受/拒绝
 				Boolean hasChangedInviteState = Boolean.FALSE;
+				// 是否需要拉取子数据
+				Boolean needPullGroup = Boolean.FALSE;
 				
 				Boolean hasCloudData = false;
 				
@@ -263,6 +266,9 @@ public class MainVerticle extends AbstractVerticle {
 						if (config().getBoolean("log.info", Boolean.FALSE)) {
 							System.out.println("Sender pushed with storaged data.");
 						}
+						
+						hasChangedCompared = compareChangedPayload(storage.getJsonObject("payload"), payload, fields);
+						hasChangedInviteState = compareShareStatement(storage.getJsonObject("_sharestate", new JsonObject()), from, status, invitestate, todostate, "invitestate");
 
 						storage.put("_operation", "owner_update");				// 本数据操作
 						storage.put("_deviceid", device);
@@ -281,9 +287,6 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_clienttimestamp", timestamp);
 						storage.put("_servertimestamp", System.currentTimeMillis());
 						storage.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, ExchangeMethod.OwnerToOwner));
-						
-						hasChangedCompared = compareChangedPayload(storage.getJsonObject("payload"), payload, fields);
-						hasChangedInviteState = compareShareStatement(storage.getJsonObject("_sharestate", new JsonObject()), from, status, invitestate, todostate, "invitestate");
 					} else {
 						// 不存在元数据
 						storage = new JsonObject();
@@ -328,6 +331,14 @@ public class MainVerticle extends AbstractVerticle {
 						JsonArray reverseto = to.copy();
 						reverseto.add(from);
 						reverseto.remove(storage.getString("_phoneno", ""));
+
+						hasChangedCompared = compareChangedPayload(storage.getJsonObject("payload"), payload, fields);
+						hasChangedInviteState = compareShareStatement(storage.getJsonObject("_sharestate", new JsonObject()), from, status, invitestate, todostate, "invitestate");
+						
+						// 受邀人接受主数据
+						if (parent && hasChangedInviteState && "accepted".equals(invitestate)) {
+							needPullGroup = Boolean.TRUE;
+						}
 						
 						storage.put("_operation", "other_update");				// 本数据操作
 						storage.put("_datatitle", title);
@@ -341,9 +352,6 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_clienttimestamp", timestamp);
 						storage.put("_servertimestamp", System.currentTimeMillis());
 						storage.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, ExchangeMethod.MemberToOwner));
-
-						hasChangedCompared = compareChangedPayload(storage.getJsonObject("payload"), payload, fields);
-						hasChangedInviteState = compareShareStatement(storage.getJsonObject("_sharestate", new JsonObject()), from, status, invitestate, todostate, "invitestate");
 					} else {
 						// 不存在元数据
 						// 忽略
@@ -498,8 +506,69 @@ public class MainVerticle extends AbstractVerticle {
 						forwards.add(todata);
 					}
 					
-					// 保存元数据
-					savepush(endpointFuture, collection, storage, fields, forwards);
+
+					// 拉取子数据
+					if (needPullGroup) {
+						List<Future<JsonObject>> compositeFutures = new LinkedList<>();
+
+						Future<JsonObject> aFuture = Future.future();
+						compositeFutures.add(aFuture);
+
+						Future<JsonObject> bFuture = Future.future();
+						compositeFutures.add(bFuture);
+
+						CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
+						.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
+						.setHandler(handler -> {
+							if (handler.succeeded()) {
+								List<JsonObject> results = handler.result();
+								
+								JsonArray datas = new JsonArray();
+								for (JsonObject result : results) {
+									if (result != null && !result.isEmpty())
+										datas.add(result);
+								}
+
+								endpointFuture.complete(new JsonObject().put("datas", datas));
+							} else {
+								endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+							}
+						});
+						
+						// 保存元数据
+						savepush(aFuture, collection, storage, fields, forwards);
+						
+						Future<JsonObject> pFuture = Future.future();
+
+						pFuture.setHandler(pullgroup -> {
+							if (pullgroup.succeeded()) {
+								JsonObject result = pullgroup.result();
+
+								if (result != null) {
+									JsonArray datas = result.getJsonArray("datas", new JsonArray());
+									
+									if (datas.size() > 0) {
+										// 保存元数据
+										savepush(bFuture, collection, null, fields, datas);
+									} else {
+										bFuture.complete(new JsonObject().put("datas", new JsonArray()));
+									}
+								} else {
+									bFuture.complete(new JsonObject().put("datas", new JsonArray()));
+								}
+							} else {
+								bFuture.complete(new JsonObject().put("datas", new JsonArray()));
+							}
+						});
+						
+						JsonArray groupdata = new JsonArray();
+						groupdata.add(id);
+						
+						pullgroup(pFuture, account, device, type, groupdata);
+					} else {
+						// 保存元数据
+						savepush(endpointFuture, collection, storage, fields, forwards);
+					}
 				} else {
 					// 异常push
 					if (config().getBoolean("log.error", Boolean.TRUE)) {
@@ -1273,6 +1342,7 @@ public class MainVerticle extends AbstractVerticle {
 				List<JsonObject> datas = find.result();
 				
 				if (datas != null && datas.size() > 0) {
+					List<Future<JsonObject>> compositeFutures = new LinkedList<>();
 					
 					for (JsonObject single : datas) {
 						// 拉取请求发起人设备上的数据
@@ -1280,6 +1350,9 @@ public class MainVerticle extends AbstractVerticle {
 						String from = single.getString("_exchangephoneno");
 						String groupid = single.getString("_dataid");
 						
+						Future<JsonObject> subFuture = Future.future();
+						compositeFutures.add(subFuture);
+
 						// 复制子日程到本用户
 						String maincollection = "sas_" + datatype.toLowerCase();
 						
@@ -1290,21 +1363,22 @@ public class MainVerticle extends AbstractVerticle {
 						
 						mongodb.find(maincollection, maincondition, mainfind -> {
 							if (mainfind.succeeded()) {
-								List<JsonObject> diff = mainfind.result();
+								List<JsonObject> ownerdatas = mainfind.result();
 								
-								List<Future<JsonObject>> compositeFutures = new LinkedList<>();
-
+								JsonArray outputs = new JsonArray();
+								
 								// 复制差分数据到设备数据
-								for (JsonObject diffone : diff) {
-									String id = diffone.getString("_dataid");
-									String datasrc = diffone.getString("_datasrc");
-									String type = diffone.getString("_datatype");
+								for (JsonObject ownerdata : ownerdatas) {
+									String id = ownerdata.getString("_dataid");
+									String datasrc = ownerdata.getString("_datasrc");
+									String type = ownerdata.getString("_datatype");
+									String status = ownerdata.getString("_datastate");
 
-									Future<JsonObject> subFuture = Future.future();
-									compositeFutures.add(subFuture);
+									ownerdata.put("_sharestate", mergeShareStatement(ownerdata.getJsonObject("_sharestate"), phoneno, status, "accepted", ""));
+									outputs.add(ownerdata);
 
 									// 数据转换 发起人数据转换成受邀人数据
-									JsonObject todata = diffone.copy();
+									JsonObject todata = ownerdata.copy();
 									
 									JsonArray members = todata.getJsonArray("_sharemembers", new JsonArray());
 									members.add(todata.getString("_phoneno", ""));	// 增加发起人
@@ -1315,6 +1389,8 @@ public class MainVerticle extends AbstractVerticle {
 									todata.put("_datasrc", datasrc);				// 设置数据来源
 									todata.put("_sharemembers", members);			// 设置接收人
 									todata.put("_operation", "update");				// 本数据操作
+									todata.put("_invitestate", "accepted");			// 设置邀请状态为接受
+									todata.put("_sharestate", mergeShareStatement(todata.getJsonObject("_sharestate"), phoneno, status, "accepted", ""));
 
 									ExchangeMethod exchange = ExchangeMethod.OwnerToMember;
 
@@ -1326,29 +1402,38 @@ public class MainVerticle extends AbstractVerticle {
 										System.out.println("DEBUG [" + type + "][" + datasrc + "][" + id + "] " + from + " pull to " + phoneno);
 									}
 									
-									copyonedevice(subFuture, from, device, id, datatype, diffone, true);
+									outputs.add(todata);
 								}
-								
-								CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
-								.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
-								.setHandler(handler -> {
-									if (handler.succeeded()) {
-										List<JsonObject> results = handler.result();
-										
-										endpointFuture.complete(new JsonObject().put("datas", results));
-									} else {
-										// 汇总失败
-										endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
-									}
-								});
+
+								subFuture.complete(new JsonObject().put("datas", outputs));
 							} else {
 								// 查询本帐号失败
-								endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+								subFuture.complete(new JsonObject().put("datas", new JsonArray()));
 							}
 						});
 						
 					}
 					
+					CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
+					.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
+					.setHandler(handler -> {
+						if (handler.succeeded()) {
+							List<JsonObject> results = handler.result();
+							
+							JsonArray merged = new JsonArray();
+							for (JsonObject result : results) {
+								JsonArray subresults = result.getJsonArray("datas", new JsonArray());
+								
+								merged.addAll(subresults);
+							}
+							
+							endpointFuture.complete(new JsonObject().put("datas", results));
+						} else {
+							// 汇总失败
+							endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+						}
+					});
+
 				} else {
 					endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 				}
@@ -1370,7 +1455,7 @@ public class MainVerticle extends AbstractVerticle {
 			compositeFutures.add(endpointFuture);
 
 			// 拉去分组数据
-			if (datatype.contains("#")) {
+			if (datatype.endsWith("#Group")) {
 				String type = datatype.substring(0, datatype.indexOf("#"));
 				pullgroup(endpointFuture, account, device, type, data);
 			} else {	// 拉去指定数据
