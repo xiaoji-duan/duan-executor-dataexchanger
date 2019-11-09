@@ -140,6 +140,7 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("title", data.getString("_datatitle"));
 						converted.put("datetime", data.getString("_datadatetime"));
 						converted.put("main", data.getBoolean("_datamain"));
+						converted.put("group", data.getString("_datagroup"));
 						converted.put("to", data.getJsonArray("_sharemembers"));
 						converted.put("sharestate", data.getJsonObject("_sharestate", new JsonObject()));
 						converted.put("security", data.getString("_sharemethod"));
@@ -200,6 +201,7 @@ public class MainVerticle extends AbstractVerticle {
 		String title = next.getString("title", "");
 		String datetime = next.getString("datetime", "");
 		Boolean main = next.getBoolean("main", Boolean.FALSE);
+		String group = next.getString("group", "");				// 2019/11/07 增加数据分组,用户减少参与人数据同步量
 		JsonArray to = next.getJsonArray("to", new JsonArray());
 		String security = next.getString("security", "Unkown");
 		String status = next.getString("status", "Unkown");
@@ -233,6 +235,13 @@ public class MainVerticle extends AbstractVerticle {
 					selfpush = Boolean.TRUE;
 				}
 				
+				// 判断是否是发起人删除
+				Boolean hasOwnerRemoved = Boolean.FALSE;
+				// 判断是否修改了需要共享的字段
+				Boolean hasChangedCompared = Boolean.TRUE;
+				// 判断是否修改了接受/拒绝
+				Boolean hasChangedInviteState = Boolean.FALSE;
+				
 				Boolean hasCloudData = false;
 				
 				if (existed != null && !existed.isEmpty()) {
@@ -243,6 +252,10 @@ public class MainVerticle extends AbstractVerticle {
 
 				// 更新或保存元数据
 				if (selfpush) {
+					if ("del".equals(status)) {
+						hasOwnerRemoved = Boolean.TRUE;
+					}
+
 					// 本人更新
 					if (hasCloudData) {
 						// 存在元数据
@@ -256,6 +269,7 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_datatitle", title);
 						storage.put("_datadatetime", datetime);
 						storage.put("_datamain", main);
+						storage.put("_datagroup", group);
 						storage.put("_datastate", status);
 						storage.put("_invitestate", invitestate);
 						storage.put("_todostate", todostate);
@@ -267,6 +281,9 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_clienttimestamp", timestamp);
 						storage.put("_servertimestamp", System.currentTimeMillis());
 						storage.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, ExchangeMethod.OwnerToOwner));
+						
+						hasChangedCompared = compareChangedPayload(storage.getJsonObject("payload"), payload, fields);
+						hasChangedInviteState = compareShareStatement(storage.getJsonObject("_sharestate", new JsonObject()), from, status, invitestate, todostate, "invitestate");
 					} else {
 						// 不存在元数据
 						storage = new JsonObject();
@@ -283,6 +300,7 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_datatitle", title);
 						storage.put("_datadatetime", datetime);
 						storage.put("_datamain", main);
+						storage.put("_datagroup", group);
 						storage.put("_datasrc", src);
 						storage.put("_datastate", status);
 						storage.put("_invitestate", invitestate);
@@ -315,6 +333,7 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_datatitle", title);
 						storage.put("_datadatetime", datetime);
 						storage.put("_datamain", main);
+						storage.put("_datagroup", group);						// 理论上参与人不能修改重复选项,不会改变数据分组,不需要更新
 						storage.put("_sharestate", mergeShareStatement(storage.getJsonObject("_sharestate"), from, status, invitestate, todostate));
 						storage.put("_sharemembers", reverseto);
 						storage.put("_sharemethod", security);
@@ -322,6 +341,9 @@ public class MainVerticle extends AbstractVerticle {
 						storage.put("_clienttimestamp", timestamp);
 						storage.put("_servertimestamp", System.currentTimeMillis());
 						storage.put("payload", mergePayload(storage.getJsonObject("payload"), payload, fields, ExchangeMethod.MemberToOwner));
+
+						hasChangedCompared = compareChangedPayload(storage.getJsonObject("payload"), payload, fields);
+						hasChangedInviteState = compareShareStatement(storage.getJsonObject("_sharestate", new JsonObject()), from, status, invitestate, todostate, "invitestate");
 					} else {
 						// 不存在元数据
 						// 忽略
@@ -349,6 +371,13 @@ public class MainVerticle extends AbstractVerticle {
 					JsonArray updated = changed.getJsonArray("updated", new JsonArray());
 					JsonArray removed = changed.getJsonArray("removed", new JsonArray());
 
+					// 判断是否改变了参与人
+					Boolean hasMemberChanged = Boolean.FALSE;
+					
+					if (added.size() > 0 || removed.size() > 0) {
+						hasMemberChanged = Boolean.TRUE;
+					}
+					
 					JsonArray forwards = new JsonArray();
 					String datasrc = storage.getString("_accountid", "Unknown");
 					
@@ -391,6 +420,11 @@ public class MainVerticle extends AbstractVerticle {
 
 					// 共享人员更新交换区
 					for (String updateto : (List<String>) updated.getList()) {
+						// 控制非共向字段修改减少他人同步处理
+						if (!hasMemberChanged && !hasChangedCompared && !hasOwnerRemoved && !hasChangedInviteState) {
+							break;
+						}
+
 						JsonObject todata = storage.copy();
 
 						JsonArray members = aftermembers.copy();
@@ -505,11 +539,13 @@ public class MainVerticle extends AbstractVerticle {
 
 					JsonObject forward = (JsonObject) forwardors.next();
 					String currentmember = forward.getString("_exchangephoneno", "");	// 当前数据所属成员手机
+					Boolean main = forward.getBoolean("_datamain", Boolean.FALSE);		// 当前数据是否为主数据
 					String lastupdate = forward.getString("_lastupdate");				// 最新更新人手机
 
 					mongodb.findOne(collection, new JsonObject().put("_id", forward.getString("_id")), new JsonObject(), find -> {
 						if (find.succeeded()) {
 							JsonObject existed = find.result();
+							Boolean ignore = Boolean.FALSE;
 							
 							// 存在
 							if (existed != null && !existed.isEmpty()) {
@@ -520,28 +556,38 @@ public class MainVerticle extends AbstractVerticle {
 								}
 							} else {
 								// 第一次存储,去除不共享字段
-								forward.put("payload", mergePayload(new JsonObject(), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
+								// 第一次存储,如果不是主数据,则不存储
+								if (main) {
+									forward.put("payload", mergePayload(new JsonObject(), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
+								} else {
+									ignore = Boolean.TRUE;
+								}
 							}
 							
 							// 保存共享数据
-							mongodb.save(collection, forward, forwardsaved -> {
-								if (forwardsaved.succeeded()) {
-									savedFuture.complete(forward);
-								} else {
-									// 共享数据保存失败
-									savedFuture.complete(new JsonObject());
-								}
-							});
+							if (!ignore) {
+								mongodb.save(collection, forward, forwardsaved -> {
+									if (forwardsaved.succeeded()) {
+										savedFuture.complete(forward);
+									} else {
+										// 共享数据保存失败
+										savedFuture.complete(new JsonObject());
+									}
+								});
+							} else {
+								savedFuture.complete(new JsonObject());
+							}
 						} else {	// 访问失败
+							savedFuture.complete(new JsonObject());
 							// 保存共享数据
-							mongodb.save(collection, forward, forwardsaved -> {
-								if (forwardsaved.succeeded()) {
-									savedFuture.complete(forward);
-								} else {
-									// 共享数据保存失败
-									savedFuture.complete(new JsonObject());
-								}
-							});
+//							mongodb.save(collection, forward, forwardsaved -> {
+//								if (forwardsaved.succeeded()) {
+//									savedFuture.complete(forward);
+//								} else {
+//									// 共享数据保存失败
+//									savedFuture.complete(new JsonObject());
+//								}
+//							});
 						}
 					});
 				}
@@ -735,6 +781,7 @@ public class MainVerticle extends AbstractVerticle {
 					converted.put("title", data.getString("_datatitle"));
 					converted.put("datetime", data.getString("_datadatetime"));
 					converted.put("main", data.getBoolean("_datamain"));
+					converted.put("group", data.getString("_datagroup"));
 					converted.put("operation", data.getString("_operation"));
 					converted.put("to", data.getJsonArray("_sharemembers"));
 					converted.put("todevice", deviceid);
@@ -777,6 +824,7 @@ public class MainVerticle extends AbstractVerticle {
 								converted.put("title", data.getString("_datatitle"));
 								converted.put("datetime", data.getString("_datadatetime"));
 								converted.put("main", data.getBoolean("_datamain"));
+								converted.put("group", data.getString("_datagroup"));
 								converted.put("operation", data.getString("_operation"));
 								converted.put("to", data.getJsonArray("_sharemembers"));
 								converted.put("todevice", deviceid);
@@ -1168,6 +1216,7 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("title", single.getString("_datatitle"));
 						converted.put("datetime", single.getString("_datadatetime"));
 						converted.put("main", single.getBoolean("_datamain"));
+						converted.put("group", single.getString("_datagroup"));
 						converted.put("operation", single.getString("_operation"));
 						converted.put("to", single.getJsonArray("_sharemembers"));
 						converted.put("sharestate", single.getJsonObject("_sharestate", new JsonObject()));
@@ -1191,6 +1240,124 @@ public class MainVerticle extends AbstractVerticle {
 		
 	}
 	
+	/**
+	 * 客户端拉取子数据
+	 * 重复日程的子日程,第一次共向德时候不会被复制到参与人交换区中
+	 * 参与人接受这个主日程之后，客户端请求拉取所有子日程
+	 * 
+	 * @param endpointFuture
+	 * @param account
+	 * @param device
+	 * @param datatype
+	 * @param data
+	 */
+	private void pullgroup(Future<JsonObject> endpointFuture, String account, String device, String datatype, JsonArray data) {
+		String partition = account.substring(account.length() - 1);	// 根据帐户ID尾号分区存储
+		String collection = "sas_" + partition + "_" + datatype.toLowerCase();
+		
+		JsonArray or = new JsonArray();
+
+		Iterator<Object> iterator = data.iterator();
+		while(iterator.hasNext()) {
+			String next = (String) iterator.next();
+
+			or.add(new JsonObject().put("_id", account + "_" + device + "_" + next));
+		}
+
+		JsonObject condition = new JsonObject();
+		condition.put("$or", or);
+		
+		// 找到主日程
+		mongodb.find(collection, condition, find -> {
+			if (find.succeeded()) {
+				List<JsonObject> datas = find.result();
+				
+				if (datas != null && datas.size() > 0) {
+					
+					for (JsonObject single : datas) {
+						// 拉取请求发起人设备上的数据
+						String phoneno = single.getString("_phoneno");
+						String from = single.getString("_exchangephoneno");
+						String groupid = single.getString("_dataid");
+						
+						// 复制子日程到本用户
+						String maincollection = "sas_" + datatype.toLowerCase();
+						
+						JsonObject maincondition = new JsonObject();
+						maincondition.put("_exchangephoneno", phoneno);
+						maincondition.put("_datagroup", groupid);
+						maincondition.put("_datastate", "undel");
+						
+						mongodb.find(maincollection, maincondition, mainfind -> {
+							if (mainfind.succeeded()) {
+								List<JsonObject> diff = mainfind.result();
+								
+								List<Future<JsonObject>> compositeFutures = new LinkedList<>();
+
+								// 复制差分数据到设备数据
+								for (JsonObject diffone : diff) {
+									String id = diffone.getString("_dataid");
+									String datasrc = diffone.getString("_datasrc");
+									String type = diffone.getString("_datatype");
+
+									Future<JsonObject> subFuture = Future.future();
+									compositeFutures.add(subFuture);
+
+									// 数据转换 发起人数据转换成受邀人数据
+									JsonObject todata = diffone.copy();
+									
+									JsonArray members = todata.getJsonArray("_sharemembers", new JsonArray());
+									members.add(todata.getString("_phoneno", ""));	// 增加发起人
+									members.remove(phoneno);						// 移除接收人
+
+									todata.put("_id", phoneno + "_" + todata.getString("_dataid"));
+									todata.put("_exchangephoneno", phoneno);		// 交换区数据归属人手机号
+									todata.put("_datasrc", datasrc);				// 设置数据来源
+									todata.put("_sharemembers", members);			// 设置接收人
+									todata.put("_operation", "update");				// 本数据操作
+
+									ExchangeMethod exchange = ExchangeMethod.OwnerToMember;
+
+									JsonObject fields = todata.getJsonObject("_sharefields");
+									JsonObject payload = todata.getJsonObject("payload");
+									todata.put("payload", mergePayload(payload, payload, fields, exchange));
+									
+									if (config().getBoolean("log.debug", Boolean.FALSE)) {
+										System.out.println("DEBUG [" + type + "][" + datasrc + "][" + id + "] " + from + " pull to " + phoneno);
+									}
+									
+									copyonedevice(subFuture, from, device, id, datatype, diffone, true);
+								}
+								
+								CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
+								.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
+								.setHandler(handler -> {
+									if (handler.succeeded()) {
+										List<JsonObject> results = handler.result();
+										
+										endpointFuture.complete(new JsonObject().put("datas", results));
+									} else {
+										// 汇总失败
+										endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+									}
+								});
+							} else {
+								// 查询本帐号失败
+								endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+							}
+						});
+						
+					}
+					
+				} else {
+					endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+				}
+			} else {
+				endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+			}
+		});
+	}
+	
 	private void pull(String consumer, String from, JsonObject header, String datatype, JsonArray data, String nextTask) {
 		String account = header.getString("ai");
 		String device = header.getString("di");
@@ -1198,11 +1365,17 @@ public class MainVerticle extends AbstractVerticle {
 		List<Future<JsonObject>> compositeFutures = new LinkedList<>();
 
 		if (data.size() > 0) {
-			// 拉取指定数据
+			// 拉取指定数据/分组数据
 			Future<JsonObject> endpointFuture = Future.future();
 			compositeFutures.add(endpointFuture);
 
-			pull(endpointFuture, account, device, datatype, data);
+			// 拉去分组数据
+			if (datatype.contains("#")) {
+				String type = datatype.substring(0, datatype.indexOf("#"));
+				pullgroup(endpointFuture, account, device, type, data);
+			} else {	// 拉去指定数据
+				pull(endpointFuture, account, device, datatype, data);
+			}
 		} else {
 			if ("*".equals(datatype)) {
 				// 拉取所有数据(本帐号与本设备差分数据和本设备既存数据)
@@ -1334,6 +1507,30 @@ public class MainVerticle extends AbstractVerticle {
 		});
 	}
 
+	private Boolean compareShareStatement(JsonObject statement, String from, String datastate, String invitestate, String todostate, String comparefor) {
+		Boolean changed = Boolean.FALSE;
+		
+		JsonObject currentstatement = statement.getJsonObject(from, new JsonObject());
+		
+		if ("datastate".equals(comparefor)) {
+			
+		}
+
+		if ("invitestate".equals(comparefor)) {
+			if ("accepted".equals(invitestate) || "rejected".equals(invitestate)) {
+				if (!invitestate.equals(currentstatement.getString("invitestate", ""))) {
+					changed = Boolean.TRUE;
+				}
+			}
+		}
+		
+		if ("todostate".equals(comparefor)) {
+			
+		}
+		
+		return changed;
+	}
+	
 	private JsonObject mergeShareStatement(JsonObject statement, String from, String datastate, String invitestate, String todostate) {
 		JsonObject merged = new JsonObject();
 		
@@ -1357,8 +1554,39 @@ public class MainVerticle extends AbstractVerticle {
 		return merged;
 	}
 	
-	private JsonObject comparePayload(JsonObject origin, JsonObject current) {
-		JsonObject changes = new JsonObject();
+	private Boolean compareChangedPayload(JsonObject origin, JsonObject current, JsonObject fields) {
+		Boolean hasChangedCompare = Boolean.FALSE;
+		
+		JsonArray compared = fields.getJsonArray("compared", new JsonArray());
+
+		if (compared.size() > 0) {
+			JsonArray changed = comparePayload(origin, current);
+
+			if (changed != null) {
+				if (config().getBoolean("log.debug", Boolean.FALSE)) {
+					System.out.println("DEBUG payload compared with changes: " + changed.encode());
+				}
+			}
+
+			Iterator changedfields = changed.iterator();
+			
+			while(changedfields.hasNext()) {
+				String field = (String) changedfields.next();
+				
+				if (compared.contains(field)) {
+					hasChangedCompare = Boolean.TRUE;
+					break;
+				}
+			}
+		} else {
+			hasChangedCompare = Boolean.TRUE;
+		}
+		
+		return hasChangedCompare;
+	}
+	
+	private JsonArray comparePayload(JsonObject origin, JsonObject current) {
+		JsonArray changes = new JsonArray();
 		
 		Set<String> fieldnames = origin.fieldNames();
 		
@@ -1366,17 +1594,29 @@ public class MainVerticle extends AbstractVerticle {
 			Object originvalue = origin.getValue(fieldname);
 			Object currentvalue = current.getValue(fieldname);
 			
+			StringBuffer sblogger = new StringBuffer();
+			sblogger.append("DEBUG ");
+			sblogger.append(originvalue != null? originvalue.toString() : "null");
+			sblogger.append(" <=> ");
+			sblogger.append(currentvalue != null? currentvalue.toString() : "null");
+			
 			if (originvalue != null) {
-				System.out.print(originvalue.toString());
-				System.out.print(currentvalue.toString());
 				// 两个值不相同
 				if (!originvalue.equals(currentvalue)) {
-					changes.put(fieldname, true);
+					if (config().getBoolean("log.debug", Boolean.FALSE)) {
+						System.out.println(sblogger.toString());
+					}
+					
+					changes.add(fieldname);
 				}
 			} else {
 				// 现在的值不为null
 				if (currentvalue != null) {
-					changes.put(fieldname, true);
+					if (config().getBoolean("log.debug", Boolean.FALSE)) {
+						System.out.println(sblogger.toString());
+					}
+					
+					changes.add(fieldname);
 				}
 			}
 		}
