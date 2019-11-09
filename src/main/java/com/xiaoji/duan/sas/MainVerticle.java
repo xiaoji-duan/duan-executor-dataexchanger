@@ -1454,10 +1454,10 @@ public class MainVerticle extends AbstractVerticle {
 			Future<JsonObject> endpointFuture = Future.future();
 			compositeFutures.add(endpointFuture);
 
-			// 拉去分组数据
+			// 拉去分组数据 不通过客户端拉取
 			if (datatype.endsWith("#Group")) {
-				String type = datatype.substring(0, datatype.indexOf("#"));
-				pullgroup(endpointFuture, account, device, type, data);
+//				String type = datatype.substring(0, datatype.indexOf("#"));
+//				pullgroup(endpointFuture, account, device, type, data);
 			} else {	// 拉去指定数据
 				pull(endpointFuture, account, device, datatype, data);
 			}
