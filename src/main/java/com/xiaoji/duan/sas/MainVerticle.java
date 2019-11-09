@@ -564,7 +564,7 @@ public class MainVerticle extends AbstractVerticle {
 						JsonArray groupdata = new JsonArray();
 						groupdata.add(id);
 						
-						pullgroup(pFuture, account, device, type, groupdata);
+						pushgroup(pFuture, account, device, type, groupdata);
 					} else {
 						// 保存元数据
 						savepush(endpointFuture, collection, storage, fields, forwards);
@@ -1320,7 +1320,7 @@ public class MainVerticle extends AbstractVerticle {
 	 * @param datatype
 	 * @param data
 	 */
-	private void pullgroup(Future<JsonObject> endpointFuture, String account, String device, String datatype, JsonArray data) {
+	private void pushgroup(Future<JsonObject> endpointFuture, String account, String device, String datatype, JsonArray data) {
 		String partition = account.substring(account.length() - 1);	// 根据帐户ID尾号分区存储
 		String collection = "sas_" + partition + "_" + datatype.toLowerCase();
 		
