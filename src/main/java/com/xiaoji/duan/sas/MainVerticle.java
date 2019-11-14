@@ -429,8 +429,8 @@ public class MainVerticle extends AbstractVerticle {
 					// 共享人员更新交换区
 					for (String updateto : (List<String>) updated.getList()) {
 						// 控制非共向字段修改减少他人同步处理
-						if (!hasMemberChanged && !hasChangedCompared && !hasOwnerRemoved && !hasChangedInviteState) {
-							break;
+						if (!updateto.equals(from) && !hasMemberChanged && !hasChangedCompared && !hasOwnerRemoved && !hasChangedInviteState) {
+							continue;
 						}
 
 						JsonObject todata = storage.copy();
