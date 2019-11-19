@@ -26,7 +26,6 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.ext.mongo.AggregateOptions;
-import io.vertx.ext.mongo.FindOptions;
 import io.vertx.ext.mongo.MongoClient;
 
 public class MainVerticle extends AbstractVerticle {
@@ -1148,7 +1147,19 @@ public class MainVerticle extends AbstractVerticle {
 		condition.put("_exchangephoneno", from)
 				 .put("_dataid", 
 						new JsonObject().put("$exists", true))
-				 .put("_datastate", "undel");
+				 .put("_datastate", "undel")
+				 .put("$or", new JsonArray()
+						.add(new JsonObject()
+							.put("_sharestate." + from, new JsonObject()
+									.put("$exists", false))
+							)
+						.add(new JsonObject()
+								.put("_sharestate." + from, new JsonObject()
+									.put("$exists", true))
+								.put("_sharestate." + from + ".datastate", new JsonObject()
+										.put("$ne", "del"))
+								)
+						);
 	
 		mongodb.find(collection, condition, finddiff -> {
 			if (finddiff.succeeded()) {
@@ -1259,7 +1270,7 @@ public class MainVerticle extends AbstractVerticle {
 				if (an != null) {
 					if (an != count) {
 						difference.add(day);
-						System.out.println(day + " | " + count + " <=> " + an);
+						System.out.println(day + " | " + count + " [S]<=>[C] " + an);
 					}
 				}
 
@@ -1288,7 +1299,7 @@ public class MainVerticle extends AbstractVerticle {
 		return difference;
 	}
 	
-	private void pullclientdiff(Future<JsonObject> endpointFuture, String from, String account, String device, String datatype, JsonArray client) {
+	private void pulldiff(Future<JsonObject> endpointFuture, String from, String account, String device, String datatype, JsonArray client) {
 		// 查询本帐号
 		String collection = "sas_" + datatype.toLowerCase();	// 本帐号数据
 
@@ -1434,75 +1445,6 @@ public class MainVerticle extends AbstractVerticle {
 			}
 		});
 		
-	}
-	
-	private void pulldiff(Future<JsonObject> endpointFuture, String from, String account, String device, String datatype, JsonArray client) {
-		String partition = account.substring(account.length() - 1);	// 根据帐户ID尾号分区存储
-		String devicecollection = "sas_" + partition + "_" + datatype.toLowerCase();
-		
-		FindOptions options = new FindOptions();
-		options.setFields(new JsonObject().put("_dataid", true));
-		
-		// 查询本设备
-		mongodb.findWithOptions(devicecollection, new JsonObject(), options, finddevice -> {
-			if (finddevice.succeeded()) {
-				List<JsonObject> devicedatas = finddevice.result();
-				
-				JsonArray notin = new JsonArray();
-				for (JsonObject data : devicedatas) {
-					notin.add(data.getString("_dataid"));
-				}
-				
-				// 查询本帐号
-				String collection = "sas_" + datatype.toLowerCase();	// 本帐号数据
-				
-				JsonObject condition = new JsonObject();
-				condition.put("$and", new JsonArray()
-						.add(new JsonObject().put("_dataid", 
-								new JsonObject().put("$exists", true)))
-						.add(new JsonObject().put("_dataid", 
-								new JsonObject().put("$not", 
-										new JsonObject().put("$in", notin))))
-				);
-			
-				mongodb.find(collection, condition, finddiff -> {
-					if (finddiff.succeeded()) {
-						List<JsonObject> diff = finddiff.result();
-						
-						List<Future<JsonObject>> compositeFutures = new LinkedList<>();
-
-						// 复制差分数据到设备数据
-						for (JsonObject diffone : diff) {
-							String id = diffone.getString("_dataid");
-
-							Future<JsonObject> subFuture = Future.future();
-							compositeFutures.add(subFuture);
-
-							copyonedevice(subFuture, from, device, id, datatype, diffone, true);
-						}
-						
-						CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
-						.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
-						.setHandler(handler -> {
-							if (handler.succeeded()) {
-								List<JsonObject> results = handler.result();
-								
-								endpointFuture.complete(new JsonObject().put("datas", results));
-							} else {
-								// 汇总失败
-								endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
-							}
-						});
-					} else {
-						// 查询本帐号失败
-						endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
-					}
-				});
-			} else {
-				// 查询本设备失败
-				endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
-			}
-		});
 	}
 	
 	private void pull(Future<JsonObject> endpointFuture, String account, String device, String datatype, JsonArray data) {
@@ -1725,7 +1667,7 @@ public class MainVerticle extends AbstractVerticle {
 			} else if (datatype.endsWith("#Diff")) {
 				// 拉取所有差分数据(本帐号与本设备差分数据)
 				String type = datatype.substring(0, datatype.indexOf("#"));
-				pullclientdiff(endpointFuture, from, account, device, type, data);
+				pulldiff(endpointFuture, from, account, device, type, data);
 			} else {	// 拉去指定数据
 				pull(endpointFuture, account, device, datatype, data);
 			}
