@@ -24,6 +24,8 @@ import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.eventbus.MessageProducer;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.streams.ReadStream;
+import io.vertx.ext.mongo.AggregateOptions;
 import io.vertx.ext.mongo.FindOptions;
 import io.vertx.ext.mongo.MongoClient;
 
@@ -1183,7 +1185,258 @@ public class MainVerticle extends AbstractVerticle {
 		});
 	}
 	
-	private void pulldiff(Future<JsonObject> endpointFuture, String from, String account, String device, String datatype) {
+	/**
+	 * 
+	 * 解码
+	 * 
+	 * @param code "2019/01/01 0,2019/01/02 3,...,2019/12/31 12"
+	 * @return
+	 */
+	private JsonArray decode(String code) {
+		JsonArray decoded = new JsonArray();
+		
+		List<String> daycodes = Arrays.asList(code.split(","));
+		
+		for (String daycode : daycodes) {
+			String[] daydecode = daycode.split(" ");
+			
+			decoded.add(new JsonObject()
+					.put("day", daydecode[0])
+					.put("count", Integer.valueOf(daydecode[1]))
+					);
+		}
+		
+		return decoded;
+	}
+	
+	/**
+	 * 
+	 * 解码
+	 * 
+	 * @param code "2019/01/01 0,2019/01/02 3,...,2019/12/31 12"
+	 * @return
+	 */
+	private String encode(JsonArray codesource) {
+		StringBuffer encoded = new StringBuffer();
+		
+		Iterator it = codesource.iterator();
+		while(it.hasNext()) {
+			JsonObject daysource = (JsonObject) it.next();
+			
+			String day = daysource.getString("day");
+			Integer count = daysource.getInteger("count", 0);
+			
+			if (encoded.length() > 0) {
+				encoded.append(",");
+			}
+			encoded.append(day);
+			encoded.append(" ");
+			encoded.append(count);
+		}
+		
+		return encoded.toString();
+	}
+	
+	private JsonArray diffdaycounts(JsonArray one, JsonArray another) {
+		JsonArray difference = new JsonArray();
+
+		JsonObject alldays = new JsonObject();
+		
+		int onesize = one.size();
+		int anothersize = another.size();
+		
+		int maxsize = Integer.max(onesize, anothersize);
+		
+		for (int index = 0; index < maxsize; index ++) {
+			if (index < onesize) {
+				JsonObject dayone = one.getJsonObject(index);
+				
+				String day = dayone.getString("day");
+				Integer count = dayone.getInteger("count");
+				
+				JsonObject currentday = alldays.getJsonObject(day, new JsonObject());
+				Integer an = currentday.getInteger("another");
+				if (an != null) {
+					if (an != count) {
+						difference.add(day);
+						System.out.println(day + " | " + count + " <=> " + an);
+					}
+				}
+
+				alldays.put(day, currentday.put("one", count));
+			}
+
+			if (index < anothersize) {
+				JsonObject dayanother = another.getJsonObject(index);
+				
+				String day = dayanother.getString("day");
+				Integer count = dayanother.getInteger("count");
+
+				JsonObject currentday = alldays.getJsonObject(day, new JsonObject());
+				Integer o = currentday.getInteger("one");
+				if (o != null) {
+					if (o != count) {
+						difference.add(day);
+						System.out.println(day + " | " + o + " [S]<=>[C] " + count);
+					}
+				}
+
+				alldays.put(day, currentday.put("another", count));
+			}
+		}
+		
+		return difference;
+	}
+	
+	private void pullclientdiff(Future<JsonObject> endpointFuture, String from, String account, String device, String datatype, JsonArray client) {
+		// 查询本帐号
+		String collection = "sas_" + datatype.toLowerCase();	// 本帐号数据
+
+		// 解码客户端数据
+		String clientcode = client.getString(0);
+		
+		JsonArray clientdaycounts = decode(clientcode);
+		
+		JsonArray condition = new JsonArray();
+		condition.add(new JsonObject()
+				.put("$match", new JsonObject()
+						.put("_exchangephoneno", from)
+						.put("_datastate", new JsonObject()
+								.put("$ne", "del")
+								)
+						.put("$or", new JsonArray()
+								.add(new JsonObject()
+									.put("_sharestate." + from, new JsonObject()
+											.put("$exists", false))
+									)
+								.add(new JsonObject()
+										.put("_sharestate." + from, new JsonObject()
+											.put("$exists", true))
+										.put("_sharestate." + from + ".datastate", new JsonObject()
+												.put("$ne", "del"))
+										)
+								)
+						)
+				);
+		condition.add(new JsonObject()
+				.put("$project", new JsonObject()
+						.put("_id", true)
+						.put("day", new JsonObject()
+								.put("$substrCP", new JsonArray()
+										.add("$_datadatetime")
+										.add(0)
+										.add(10)
+										)
+								)
+						)
+				);
+		condition.add(new JsonObject()
+				.put("$group", new JsonObject()
+						.put("_id", "$day")
+						.put("day", new JsonObject()
+								.put("$first", "$day"))
+						.put("count", new JsonObject()
+								.put("$sum", 1)
+								)
+						)
+				);
+		
+		System.out.println(datatype + " diff.");
+		System.out.println(condition.encodePrettily());
+		
+		AggregateOptions options = new AggregateOptions();
+		options.setMaxTime(0L);
+		options.setMaxAwaitTime(0L);
+		
+		ReadStream<JsonObject> aggregate = mongodb.aggregateWithOptions(collection, condition, options);
+		aggregate.exceptionHandler(error -> {
+			if (error != null) System.out.println(error.getMessage());
+		});
+
+		JsonArray fetched = new JsonArray();
+		aggregate.handler(fetched::add);
+		
+		aggregate.endHandler(aggregatehandler -> {
+
+			JsonArray difference = diffdaycounts(fetched, clientdaycounts);
+			
+			if (difference != null && difference.size() > 0) {
+
+				JsonArray diffcondition = new JsonArray();
+				diffcondition.add(new JsonObject()
+						.put("$match", new JsonObject()
+								.put("_exchangephoneno", from)));
+				diffcondition.add(new JsonObject()
+					.put("$addFields", new JsonObject()
+							.put("_datadate", new JsonObject()
+								.put("$substrCP", new JsonArray()
+										.add("$_datadatetime")
+										.add(0)
+										.add(10)
+										)
+						))
+					);
+				diffcondition.add(new JsonObject()
+						.put("$match", new JsonObject()
+								.put("_datadate", new JsonObject()
+										.put("$in", difference))));
+				
+				System.out.println("Fetch difference " + datatype + "s.");
+				System.out.println(diffcondition.encodePrettily());
+
+				ReadStream<JsonObject> diffaggregate = mongodb.aggregateWithOptions(collection, diffcondition, options);
+				diffaggregate.exceptionHandler(error -> {
+					if (error != null) System.out.println(error.getMessage());
+				});
+				
+				JsonArray difffetched = new JsonArray();
+				diffaggregate.handler(difffetched::add);
+				
+				diffaggregate.endHandler(diffaggregatehandler -> {
+						
+					if (difffetched.size() > 0) {
+						System.out.println(datatype + " diff to copy " + difffetched.size() + " datas.");
+						List<Future<JsonObject>> compositeFutures = new LinkedList<>();
+
+						List<JsonObject> diff = difffetched.getList();
+						
+						// 复制差分数据到设备数据
+						for (JsonObject diffone : diff) {
+							String id = diffone.getString("_dataid");
+
+							System.out.println(datatype + " | " + id + " | " + from + " " + diffone.getString("_datadatetime") + " " + diffone.getString("_datatitle"));
+							Future<JsonObject> subFuture = Future.future();
+							compositeFutures.add(subFuture);
+
+							copyonedevice(subFuture, from, device, id, datatype, diffone, true);
+						}
+						
+						CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
+						.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
+						.setHandler(handler -> {
+							if (handler.succeeded()) {
+								List<JsonObject> results = handler.result();
+								
+								endpointFuture.complete(new JsonObject().put("datas", results));
+							} else {
+								// 汇总失败
+								endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+							}
+						});
+					} else {
+						System.out.println("No difference " + datatype + "s fetched.");
+						endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+					}
+				});
+			} else {
+				System.out.println(from + "|" + device + "'s " + datatype + " data has all synced.");
+				endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+			}
+		});
+		
+	}
+	
+	private void pulldiff(Future<JsonObject> endpointFuture, String from, String account, String device, String datatype, JsonArray client) {
 		String partition = account.substring(account.length() - 1);	// 根据帐户ID尾号分区存储
 		String devicecollection = "sas_" + partition + "_" + datatype.toLowerCase();
 		
@@ -1442,7 +1695,18 @@ public class MainVerticle extends AbstractVerticle {
 			}
 		});
 	}
-	
+
+	/**
+	 * 
+	 * 客户端拉取服务器端数据请求
+	 * 
+	 * @param consumer
+	 * @param from
+	 * @param header
+	 * @param datatype 数据类型 Agenda,Plan,Agenda#Group,(Agenda|Plan|Task or *),Agenda#Diff
+	 * @param data
+	 * @param nextTask
+	 */
 	private void pull(String consumer, String from, JsonObject header, String datatype, JsonArray data, String nextTask) {
 		String account = header.getString("ai");
 		String device = header.getString("di");
@@ -1458,6 +1722,10 @@ public class MainVerticle extends AbstractVerticle {
 			if (datatype.endsWith("#Group")) {
 //				String type = datatype.substring(0, datatype.indexOf("#"));
 //				pullgroup(endpointFuture, account, device, type, data);
+			} else if (datatype.endsWith("#Diff")) {
+				// 拉取所有差分数据(本帐号与本设备差分数据)
+				String type = datatype.substring(0, datatype.indexOf("#"));
+				pullclientdiff(endpointFuture, from, account, device, type, data);
 			} else {	// 拉去指定数据
 				pull(endpointFuture, account, device, datatype, data);
 			}
@@ -1479,12 +1747,17 @@ public class MainVerticle extends AbstractVerticle {
 
 					pullfull(endpointFuture, from, account, device, type);
 				}
-			} else {
-				// 拉取所有差分数据(本帐号与本设备差分数据)
-				Future<JsonObject> endpointFuture = Future.future();
-				compositeFutures.add(endpointFuture);
+			} else if (datatype.contains("|")) {
+				List<String> types = Arrays.asList(datatype.split("|"));
 
-				pulldiff(endpointFuture, from, account, device, datatype);
+				for (String type : types) {
+					Future<JsonObject> endpointFuture = Future.future();
+					compositeFutures.add(endpointFuture);
+
+					pullfull(endpointFuture, from, account, device, type);
+				}
+			} else {
+				// 未定义此操作
 			}
 		}
 		
