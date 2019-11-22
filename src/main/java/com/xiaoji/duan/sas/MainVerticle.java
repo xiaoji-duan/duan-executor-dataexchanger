@@ -213,7 +213,7 @@ public class MainVerticle extends AbstractVerticle {
 		JsonObject payload = next.getJsonObject("payload");
 	
 		if (config().getBoolean("log.debug", Boolean.FALSE)) {
-			System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " => " + to.toString());
+			System.out.println("DEBUG 216[" + type + "][" + src + "][" + id + "] " + from + " => " + to.toString());
 		}
 
 		String primaryid = src + "_" + id;		// 用于查询交换区元数据
@@ -526,8 +526,11 @@ public class MainVerticle extends AbstractVerticle {
 								
 								JsonArray datas = new JsonArray();
 								for (JsonObject result : results) {
-									if (result != null && !result.isEmpty())
-										datas.add(result);
+									if (result != null && !result.isEmpty()) {
+										JsonArray ds = result.getJsonArray("datas", new JsonArray());
+										
+										datas.addAll(ds);
+									}
 								}
 
 								endpointFuture.complete(new JsonObject().put("datas", datas));
@@ -594,98 +597,184 @@ public class MainVerticle extends AbstractVerticle {
 	
 	private void savepush(Future<JsonObject> endpointFuture, String collection, JsonObject storage, JsonObject fields, JsonArray forwards) {
 
-		mongodb.save(collection, storage, saved -> {
-			if (saved.succeeded()) {
-				List<Future<JsonObject>> compositeFutures = new LinkedList<>();
+		if (storage != null) {	// 正常保存上传,非自数据拉取
+			mongodb.save(collection, storage, saved -> {
+				if (saved.succeeded()) {
+					List<Future<JsonObject>> compositeFutures = new LinkedList<>();
 
-				Future<JsonObject> savedsrcFuture = Future.future();
-				compositeFutures.add(savedsrcFuture);
-				
-				// 更新/保存成功
-				Iterator<Object> forwardors = forwards.iterator();
-				while(forwardors.hasNext()) {
-					Future<JsonObject> savedFuture = Future.future();
-					compositeFutures.add(savedFuture);
+					Future<JsonObject> savedsrcFuture = Future.future();
+					compositeFutures.add(savedsrcFuture);
+					
+					// 更新/保存成功
+					Iterator<Object> forwardors = forwards.iterator();
+					while(forwardors.hasNext()) {
+						Future<JsonObject> savedFuture = Future.future();
+						compositeFutures.add(savedFuture);
 
-					JsonObject forward = (JsonObject) forwardors.next();
-					String currentmember = forward.getString("_exchangephoneno", "");	// 当前数据所属成员手机
-					Boolean main = forward.getBoolean("_datamain", Boolean.FALSE);		// 当前数据是否为主数据
-					String lastupdate = forward.getString("_lastupdate");				// 最新更新人手机
+						JsonObject forward = (JsonObject) forwardors.next();
+						String currentmember = forward.getString("_exchangephoneno", "");	// 当前数据所属成员手机
+						Boolean main = forward.getBoolean("_datamain", Boolean.FALSE);		// 当前数据是否为主数据
+						String lastupdate = forward.getString("_lastupdate");				// 最新更新人手机
 
-					mongodb.findOne(collection, new JsonObject().put("_id", forward.getString("_id")), new JsonObject(), find -> {
-						if (find.succeeded()) {
-							JsonObject existed = find.result();
-							Boolean ignore = Boolean.FALSE;
-							
-							// 存在
-							if (existed != null && !existed.isEmpty()) {
-								if (currentmember.equals(lastupdate)) {
-									forward.put("payload", mergePayload(existed.getJsonObject("payload"), forward.getJsonObject("payload"), fields, ExchangeMethod.MemberToSelf));
-								} else {
-									forward.put("payload", mergePayload(existed.getJsonObject("payload"), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
-								}
-							} else {
-								// 第一次存储,去除不共享字段
-								// 第一次存储,如果不是主数据,则不存储
-								if (main) {
-									forward.put("payload", mergePayload(new JsonObject(), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
-								} else {
-									ignore = Boolean.TRUE;
-								}
-							}
-							
-							// 保存共享数据
-							if (!ignore) {
-								mongodb.save(collection, forward, forwardsaved -> {
-									if (forwardsaved.succeeded()) {
-										savedFuture.complete(forward);
+						mongodb.findOne(collection, new JsonObject().put("_id", forward.getString("_id")), new JsonObject(), find -> {
+							if (find.succeeded()) {
+								JsonObject existed = find.result();
+								Boolean ignore = Boolean.FALSE;
+								
+								// 存在
+								if (existed != null && !existed.isEmpty()) {
+									if (currentmember.equals(lastupdate)) {
+										forward.put("payload", mergePayload(existed.getJsonObject("payload"), forward.getJsonObject("payload"), fields, ExchangeMethod.MemberToSelf));
 									} else {
-										// 共享数据保存失败
-										savedFuture.complete(new JsonObject());
+										forward.put("payload", mergePayload(existed.getJsonObject("payload"), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
 									}
-								});
-							} else {
+								} else {
+									// 第一次存储,去除不共享字段
+									// 第一次存储,如果不是主数据,则不存储
+									if (main) {
+										forward.put("payload", mergePayload(new JsonObject(), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
+									} else {
+										ignore = Boolean.TRUE;
+									}
+								}
+								
+								// 保存共享数据
+								if (!ignore) {
+									mongodb.save(collection, forward, forwardsaved -> {
+										if (forwardsaved.succeeded()) {
+											savedFuture.complete(forward);
+										} else {
+											// 共享数据保存失败
+											savedFuture.complete(new JsonObject());
+										}
+									});
+								} else {
+									savedFuture.complete(new JsonObject());
+								}
+							} else {	// 访问失败
 								savedFuture.complete(new JsonObject());
+								// 保存共享数据
+//								mongodb.save(collection, forward, forwardsaved -> {
+//									if (forwardsaved.succeeded()) {
+//										savedFuture.complete(forward);
+//									} else {
+//										// 共享数据保存失败
+//										savedFuture.complete(new JsonObject());
+//									}
+//								});
 							}
-						} else {	// 访问失败
-							savedFuture.complete(new JsonObject());
-							// 保存共享数据
-//							mongodb.save(collection, forward, forwardsaved -> {
-//								if (forwardsaved.succeeded()) {
-//									savedFuture.complete(forward);
-//								} else {
-//									// 共享数据保存失败
-//									savedFuture.complete(new JsonObject());
-//								}
-//							});
+						});
+					}
+					
+					savedsrcFuture.complete(storage);
+					
+					CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
+					.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
+					.setHandler(handler -> {
+						if (handler.succeeded()) {
+							List<JsonObject> results = handler.result();
+							
+							JsonArray datas = new JsonArray();
+							for (JsonObject result : results) {
+								if (result != null && !result.isEmpty())
+									datas.add(result);
+							}
+
+							endpointFuture.complete(new JsonObject().put("datas", datas));
+						} else {
+							endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 						}
 					});
+				} else {
+					// 元数据保存失败
+					endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 				}
-				
-				savedsrcFuture.complete(storage);
-				
-				CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
-				.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
-				.setHandler(handler -> {
-					if (handler.succeeded()) {
-						List<JsonObject> results = handler.result();
-						
-						JsonArray datas = new JsonArray();
-						for (JsonObject result : results) {
-							if (result != null && !result.isEmpty())
-								datas.add(result);
-						}
+			});
+		} else {	// 拉取数据保存
 
-						endpointFuture.complete(new JsonObject().put("datas", datas));
-					} else {
-						endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+			List<Future<JsonObject>> compositeFutures = new LinkedList<>();
+
+			// 更新/保存成功
+			Iterator<Object> forwardors = forwards.iterator();
+			while(forwardors.hasNext()) {
+				Future<JsonObject> savedFuture = Future.future();
+				compositeFutures.add(savedFuture);
+
+				JsonObject forward = (JsonObject) forwardors.next();
+				String currentmember = forward.getString("_exchangephoneno", "");	// 当前数据所属成员手机
+				Boolean main = forward.getBoolean("_datamain", Boolean.FALSE);		// 当前数据是否为主数据
+				String lastupdate = forward.getString("_lastupdate");				// 最新更新人手机
+
+				mongodb.findOne(collection, new JsonObject().put("_id", forward.getString("_id")), new JsonObject(), find -> {
+					if (find.succeeded()) {
+						JsonObject existed = find.result();
+						Boolean ignore = Boolean.FALSE;
+						
+						// 存在
+						if (existed != null && !existed.isEmpty()) {
+							if (currentmember.equals(lastupdate)) {
+								forward.put("payload", mergePayload(existed.getJsonObject("payload"), forward.getJsonObject("payload"), fields, ExchangeMethod.MemberToSelf));
+							} else {
+								forward.put("payload", mergePayload(existed.getJsonObject("payload"), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
+							}
+						} else {
+							// 第一次存储,去除不共享字段
+							// 第一次存储,如果不是主数据,则不存储
+							if (main) {
+								forward.put("payload", mergePayload(new JsonObject(), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
+							} else {
+								forward.put("payload", mergePayload(new JsonObject(), forward.getJsonObject("payload"), fields, ExchangeMethod.OwnerToMember));
+							}
+						}
+						
+						// 保存共享数据
+						if (!ignore) {
+							mongodb.save(collection, forward, forwardsaved -> {
+								if (forwardsaved.succeeded()) {
+									savedFuture.complete(forward);
+								} else {
+									// 共享数据保存失败
+									savedFuture.complete(new JsonObject());
+								}
+							});
+						} else {
+							savedFuture.complete(new JsonObject());
+						}
+					} else {	// 访问失败
+						savedFuture.complete(new JsonObject());
+						// 保存共享数据
+//						mongodb.save(collection, forward, forwardsaved -> {
+//							if (forwardsaved.succeeded()) {
+//								savedFuture.complete(forward);
+//							} else {
+//								// 共享数据保存失败
+//								savedFuture.complete(new JsonObject());
+//							}
+//						});
 					}
 				});
-			} else {
-				// 元数据保存失败
-				endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 			}
-		});
+			
+			CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
+			.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
+			.setHandler(handler -> {
+				if (handler.succeeded()) {
+					List<JsonObject> results = handler.result();
+					
+					JsonArray datas = new JsonArray();
+					for (JsonObject result : results) {
+						if (result != null && !result.isEmpty())
+							datas.add(result);
+					}
+
+					endpointFuture.complete(new JsonObject().put("datas", datas));
+				} else {
+					endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
+				}
+			});
+		
+		}
+
 	}
 	
 	private void push(String consumer, String from, JsonObject header, JsonArray data, String nextTask) {
@@ -727,7 +816,7 @@ public class MainVerticle extends AbstractVerticle {
 						String id = next.getString("_dataid", "");
 
 						if (config().getBoolean("log.debug", Boolean.FALSE)) {
-							System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + from + " => " + phoneno);
+							System.out.println("DEBUG 819[" + type + "][" + src + "][" + id + "] " + from + " => " + phoneno);
 						}
 
 						if (!"".equals(phoneno)) {
@@ -839,7 +928,7 @@ public class MainVerticle extends AbstractVerticle {
 					String src = data.getString("_datasrc", "");
 					
 					if (config().getBoolean("log.debug", Boolean.FALSE)) {
-						System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + to + " => " + deviceid);
+						System.out.println("DEBUG 931[" + type + "][" + src + "][" + id + "] " + to + " => " + deviceid);
 					}
 
 					// 转换数据格式
@@ -882,7 +971,7 @@ public class MainVerticle extends AbstractVerticle {
 								String src = data.getString("_datasrc", "");
 								
 								if (config().getBoolean("log.debug", Boolean.FALSE)) {
-									System.out.println("DEBUG [" + type + "][" + src + "][" + id + "] " + to + " => " + deviceid);
+									System.out.println("DEBUG 974[" + type + "][" + src + "][" + id + "] " + to + " => " + deviceid);
 								}
 
 								// 转换数据格式
@@ -1248,7 +1337,7 @@ public class MainVerticle extends AbstractVerticle {
 		return encoded.toString();
 	}
 	
-	private JsonArray diffdaycounts(JsonArray one, JsonArray another) {
+	private JsonArray diffdaycounts(String from, String device, String datatype, JsonArray one, JsonArray another) {
 		JsonArray difference = new JsonArray();
 
 		JsonObject alldays = new JsonObject();
@@ -1270,7 +1359,7 @@ public class MainVerticle extends AbstractVerticle {
 				if (an != null) {
 					if (an != count) {
 						difference.add(day);
-						System.out.println(day + " | " + count + " [S]<=>[C] " + an);
+						System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + count + "<=>" + an);
 					}
 				}
 
@@ -1288,7 +1377,7 @@ public class MainVerticle extends AbstractVerticle {
 				if (o != null) {
 					if (o != count) {
 						difference.add(day);
-						System.out.println(day + " | " + o + " [S]<=>[C] " + count);
+						System.out.println(from + " | " + day + " | " + " [Server]<=>[" + device + "] " + o + "<=>" + count);
 					}
 				}
 
@@ -1352,8 +1441,8 @@ public class MainVerticle extends AbstractVerticle {
 						)
 				);
 		
-		System.out.println(datatype + " diff.");
-		System.out.println(condition.encodePrettily());
+		System.out.println(from + " | " + datatype + " diff.");
+//		System.out.println(condition.encodePrettily());
 		
 		AggregateOptions options = new AggregateOptions();
 		options.setMaxTime(0L);
@@ -1369,7 +1458,7 @@ public class MainVerticle extends AbstractVerticle {
 		
 		aggregate.endHandler(aggregatehandler -> {
 
-			JsonArray difference = diffdaycounts(fetched, clientdaycounts);
+			JsonArray difference = diffdaycounts(from, device, datatype, fetched, clientdaycounts);
 			
 			if (difference != null && difference.size() > 0) {
 
@@ -1392,8 +1481,8 @@ public class MainVerticle extends AbstractVerticle {
 								.put("_datadate", new JsonObject()
 										.put("$in", difference))));
 				
-				System.out.println("Fetch difference " + datatype + "s.");
-				System.out.println(diffcondition.encodePrettily());
+//				System.out.println("Fetch difference " + datatype + "s.");
+//				System.out.println(diffcondition.encodePrettily());
 
 				ReadStream<JsonObject> diffaggregate = mongodb.aggregateWithOptions(collection, diffcondition, options);
 				diffaggregate.exceptionHandler(error -> {
@@ -1406,7 +1495,7 @@ public class MainVerticle extends AbstractVerticle {
 				diffaggregate.endHandler(diffaggregatehandler -> {
 						
 					if (difffetched.size() > 0) {
-						System.out.println(datatype + " diff to copy " + difffetched.size() + " datas.");
+						System.out.println(from + " | " + datatype + " diff to copy " + difffetched.size() + " datas.");
 						List<Future<JsonObject>> compositeFutures = new LinkedList<>();
 
 						List<JsonObject> diff = difffetched.getList();
@@ -1415,7 +1504,7 @@ public class MainVerticle extends AbstractVerticle {
 						for (JsonObject diffone : diff) {
 							String id = diffone.getString("_dataid");
 
-							System.out.println(datatype + " | " + id + " | " + from + " " + diffone.getString("_datadatetime") + " " + diffone.getString("_datatitle"));
+//							System.out.println(from + " | " + datatype + " | " + id + " | " + diffone.getString("_datastate") + " " + diffone.getString("_datadatetime") + " " + diffone.getString("_datatitle"));
 							Future<JsonObject> subFuture = Future.future();
 							compositeFutures.add(subFuture);
 
@@ -1440,7 +1529,7 @@ public class MainVerticle extends AbstractVerticle {
 					}
 				});
 			} else {
-				System.out.println(from + "|" + device + "'s " + datatype + " data has all synced.");
+				System.out.println(from + "  |" + device + "'s " + datatype + " data has all synced.");
 				endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
 			}
 		});
@@ -1545,6 +1634,10 @@ public class MainVerticle extends AbstractVerticle {
 						String from = single.getString("_exchangephoneno");
 						String groupid = single.getString("_dataid");
 						
+						if (config().getBoolean("log.debug", Boolean.FALSE)) {
+							System.out.println("DEBUG [" + datatype + "][" + phoneno + "][" + groupid + "] " + from + " pull from " + phoneno);
+						}
+
 						Future<JsonObject> subFuture = Future.future();
 						compositeFutures.add(subFuture);
 
@@ -1569,23 +1662,23 @@ public class MainVerticle extends AbstractVerticle {
 									String type = ownerdata.getString("_datatype");
 									String status = ownerdata.getString("_datastate");
 
-									ownerdata.put("_sharestate", mergeShareStatement(ownerdata.getJsonObject("_sharestate"), phoneno, status, "accepted", ""));
+									ownerdata.put("_sharestate", mergeShareStatement(ownerdata.getJsonObject("_sharestate"), from, status, "accepted", ""));
 									outputs.add(ownerdata);
 
 									// 数据转换 发起人数据转换成受邀人数据
 									JsonObject todata = ownerdata.copy();
 									
 									JsonArray members = todata.getJsonArray("_sharemembers", new JsonArray());
-									members.add(todata.getString("_phoneno", ""));	// 增加发起人
-									members.remove(phoneno);						// 移除接收人
+									members.add(phoneno);	// 增加发起人
+									members.remove(from);						// 移除接收人
 
-									todata.put("_id", phoneno + "_" + todata.getString("_dataid"));
-									todata.put("_exchangephoneno", phoneno);		// 交换区数据归属人手机号
+									todata.put("_id", from + "_" + todata.getString("_dataid"));
+									todata.put("_exchangephoneno", from);		// 交换区数据归属人手机号
 									todata.put("_datasrc", datasrc);				// 设置数据来源
 									todata.put("_sharemembers", members);			// 设置接收人
-									todata.put("_operation", "update");				// 本数据操作
+									todata.put("_operation", "add");				// 本数据操作
 									todata.put("_invitestate", "accepted");			// 设置邀请状态为接受
-									todata.put("_sharestate", mergeShareStatement(todata.getJsonObject("_sharestate"), phoneno, status, "accepted", ""));
+									todata.put("_sharestate", mergeShareStatement(todata.getJsonObject("_sharestate"), from, status, "accepted", ""));
 
 									ExchangeMethod exchange = ExchangeMethod.OwnerToMember;
 
@@ -1594,7 +1687,7 @@ public class MainVerticle extends AbstractVerticle {
 									todata.put("payload", mergePayload(payload, payload, fields, exchange));
 									
 									if (config().getBoolean("log.debug", Boolean.FALSE)) {
-										System.out.println("DEBUG [" + type + "][" + datasrc + "][" + id + "] " + from + " pull to " + phoneno);
+										System.out.println("DEBUG [" + type + "][" + datasrc + "][" + id + "] " + phoneno + " pull to " + from);
 									}
 									
 									outputs.add(todata);
@@ -1622,7 +1715,7 @@ public class MainVerticle extends AbstractVerticle {
 								merged.addAll(subresults);
 							}
 							
-							endpointFuture.complete(new JsonObject().put("datas", results));
+							endpointFuture.complete(new JsonObject().put("datas", merged));
 						} else {
 							// 汇总失败
 							endpointFuture.complete(new JsonObject().put("datas", new JsonArray()));
