@@ -95,6 +95,21 @@ public class MainVerticle extends AbstractVerticle {
 		if ("fetch".equals(type)) {
 			fetch(consumer, datatype, request, next);
 		}
+
+		// 冥王星用户主动成为数据参与人
+		if ("join".equals(type)) {
+			join(consumer, from, to, datatype, request, next);
+		}
+	}
+	
+	/**
+	 * 
+	 * 冥王星用户主动加入数据参与人, 成为该数据成员
+	 * 
+	 */
+	private void join(String consumer, String from, String to, String datatype, JsonArray datas, String next) {
+		String collection = "sas_" + datatype.toLowerCase();
+		
 	}
 	
 	private void fetch(String consumer, String datatype, JsonArray datas, String next) {
@@ -1346,7 +1361,8 @@ public class MainVerticle extends AbstractVerticle {
 		int anothersize = another.size();
 		
 		int maxsize = Integer.max(onesize, anothersize);
-		
+		System.out.println(from + " | " + datatype + " | diff | " + " [Server]<=>[" + device + "] " + onesize + "<=>" + anothersize);
+
 		for (int index = 0; index < maxsize; index ++) {
 			if (index < onesize) {
 				JsonObject dayone = one.getJsonObject(index);
@@ -1377,7 +1393,7 @@ public class MainVerticle extends AbstractVerticle {
 				if (o != null) {
 					if (o != count) {
 						difference.add(day);
-						System.out.println(from + " | " + day + " | " + " [Server]<=>[" + device + "] " + o + "<=>" + count);
+						System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + o + "<=>" + count);
 					}
 				}
 
@@ -1393,9 +1409,19 @@ public class MainVerticle extends AbstractVerticle {
 		String collection = "sas_" + datatype.toLowerCase();	// 本帐号数据
 
 		// 解码客户端数据
-		String clientcode = client.getString(0);
 		
-		JsonArray clientdaycounts = decode(clientcode);
+		JsonArray clientdaycounts = new JsonArray();
+		
+		if (client.size() > 0) {
+			String clientcode = client.getString(0);
+			System.out.println(from + " | " + datatype + " diff with client code: " + clientcode + ".");
+
+			if (!"".equals(clientcode)) {
+				clientdaycounts.addAll(decode(clientcode));
+			}
+		} else {
+			System.out.println(from + " | " + datatype + " diff with client empty datas.");
+		}
 		
 		JsonArray condition = new JsonArray();
 		condition.add(new JsonObject()
@@ -1748,54 +1774,59 @@ public class MainVerticle extends AbstractVerticle {
 
 		List<Future<JsonObject>> compositeFutures = new LinkedList<>();
 
-		if (data.size() > 0) {
+		System.out.println(from + " | " + datatype + " | pull with " + data.size() + " datas.");
+		
+		// 拉去分组数据 不通过客户端拉取
+		if (datatype.endsWith("#Diff")) {
 			// 拉取指定数据/分组数据
 			Future<JsonObject> endpointFuture = Future.future();
 			compositeFutures.add(endpointFuture);
 
-			// 拉去分组数据 不通过客户端拉取
-			if (datatype.endsWith("#Group")) {
-//				String type = datatype.substring(0, datatype.indexOf("#"));
-//				pullgroup(endpointFuture, account, device, type, data);
-			} else if (datatype.endsWith("#Diff")) {
-				// 拉取所有差分数据(本帐号与本设备差分数据)
-				String type = datatype.substring(0, datatype.indexOf("#"));
-				pulldiff(endpointFuture, from, account, device, type, data);
-			} else {	// 拉去指定数据
-				pull(endpointFuture, account, device, datatype, data);
+			// 拉取所有差分数据(本帐号与本设备差分数据)
+			String type = datatype.substring(0, datatype.indexOf("#"));
+			pulldiff(endpointFuture, from, account, device, type, data);
+		} else if ("*".equals(datatype)) {
+			// 拉取所有数据(本帐号与本设备差分数据和本设备既存数据)
+			List<String> types = new ArrayList<String>();
+			types.add("Plan");
+			types.add("Attachment");
+			types.add("PlanItem");
+			types.add("Agenda");
+			types.add("Task");
+			types.add("MiniTask");
+			types.add("Memo");
+			
+			for (String type : types) {
+				Future<JsonObject> endpointFuture = Future.future();
+				compositeFutures.add(endpointFuture);
+
+				pullfull(endpointFuture, from, account, device, type);
 			}
+		} else if (datatype.contains("|")) {
+			List<String> types = Arrays.asList(datatype.split("|"));
+
+			for (String type : types) {
+				Future<JsonObject> endpointFuture = Future.future();
+				compositeFutures.add(endpointFuture);
+
+				pullfull(endpointFuture, from, account, device, type);
+			}
+		} else if (!datatype.contains("#")) {	// 拉去指定数据
+			// 拉取指定数据/分组数据
+			Future<JsonObject> endpointFuture = Future.future();
+			compositeFutures.add(endpointFuture);
+
+			pull(endpointFuture, account, device, datatype, data);
 		} else {
-			if ("*".equals(datatype)) {
-				// 拉取所有数据(本帐号与本设备差分数据和本设备既存数据)
-				List<String> types = new ArrayList<String>();
-				types.add("Plan");
-				types.add("Attachment");
-				types.add("PlanItem");
-				types.add("Agenda");
-				types.add("Task");
-				types.add("MiniTask");
-				types.add("Memo");
-				
-				for (String type : types) {
-					Future<JsonObject> endpointFuture = Future.future();
-					compositeFutures.add(endpointFuture);
+			// 拉取指定数据/分组数据
+			Future<JsonObject> endpointFuture = Future.future();
+			compositeFutures.add(endpointFuture);
 
-					pullfull(endpointFuture, from, account, device, type);
-				}
-			} else if (datatype.contains("|")) {
-				List<String> types = Arrays.asList(datatype.split("|"));
-
-				for (String type : types) {
-					Future<JsonObject> endpointFuture = Future.future();
-					compositeFutures.add(endpointFuture);
-
-					pullfull(endpointFuture, from, account, device, type);
-				}
-			} else {
-				// 未定义此操作
-			}
+			System.out.println("Undefined datatype " + datatype);
+			
+			endpointFuture.complete(new JsonObject().put("datas", new ArrayList<JsonObject>()));
 		}
-		
+
 		CompositeFuture.all(Arrays.asList(compositeFutures.toArray(new Future[compositeFutures.size()])))
 		.map(v -> compositeFutures.stream().map(Future::result).collect(Collectors.toList()))
 		.setHandler(handler -> {
