@@ -22,19 +22,23 @@ import io.vertx.core.Promise;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.eventbus.MessageProducer;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.ext.mongo.AggregateOptions;
 import io.vertx.ext.mongo.MongoClient;
+import io.vertx.ext.web.client.WebClient;
 
 public class MainVerticle extends AbstractVerticle {
 
 	private MongoClient mongodb = null;
 	private AmqpBridge bridge = null;
+	private WebClient webclient = null;
 
 	@Override
 	public void start(Promise<Void> startPromise) throws Exception {
+		webclient = WebClient.create(vertx);
 
 		JsonObject config = new JsonObject();
 		config.put("host", "mongodb");
@@ -1354,7 +1358,7 @@ public class MainVerticle extends AbstractVerticle {
 	
 	private JsonArray diffdaycounts(String from, String device, String datatype, JsonArray one, JsonArray another) {
 		JsonArray difference = new JsonArray();
-
+		
 		JsonObject alldays = new JsonObject();
 		
 		int onesize = one.size();
@@ -1363,6 +1367,8 @@ public class MainVerticle extends AbstractVerticle {
 		int maxsize = Integer.max(onesize, anothersize);
 		System.out.println(from + " | " + datatype + " | diff | " + " [Server]<=>[" + device + "] " + onesize + "<=>" + anothersize);
 
+		JsonArray nodays = new JsonArray();
+		
 		for (int index = 0; index < maxsize; index ++) {
 			if (index < onesize) {
 				JsonObject dayone = one.getJsonObject(index);
@@ -1372,11 +1378,16 @@ public class MainVerticle extends AbstractVerticle {
 				
 				JsonObject currentday = alldays.getJsonObject(day, new JsonObject());
 				Integer an = currentday.getInteger("another");
+				
+				nodays.remove(day);
+				nodays.add(day);
+				
 				if (an != null) {
 					if (an != count) {
 						difference.add(day);
-						System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + count + "<=>" + an);
+						nodays.remove(day);
 					}
+					System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + count + "<=>" + an);
 				}
 
 				alldays.put(day, currentday.put("one", count));
@@ -1390,15 +1401,24 @@ public class MainVerticle extends AbstractVerticle {
 
 				JsonObject currentday = alldays.getJsonObject(day, new JsonObject());
 				Integer o = currentday.getInteger("one");
+				
+				nodays.remove(day);
+				nodays.add(day);
+
 				if (o != null) {
 					if (o != count) {
 						difference.add(day);
-						System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + o + "<=>" + count);
+						nodays.remove(day);
 					}
+					System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + o + "<=>" + count);
 				}
 
 				alldays.put(day, currentday.put("another", count));
 			}
+		}
+		
+		if (nodays.size() > 0) {
+			difference.addAll(nodays);
 		}
 		
 		return difference;
@@ -1483,6 +1503,25 @@ public class MainVerticle extends AbstractVerticle {
 		aggregate.handler(fetched::add);
 		
 		aggregate.endHandler(aggregatehandler -> {
+			// Findbug #Start
+			String serverdaycounts = encode(fetched);
+
+			mongodb.find(collection, new JsonObject().put("_exchangephoneno", from), handler -> {
+				if (handler.succeeded()) {
+					List<JsonObject> findbugdatas = handler.result();
+					
+					// http://pluto.guobaa.com/bug/{bugtype}/{account}/{device}/{datatype}/{program}/upload
+					String url = "https://pluto.guobaa.com/bug/findbug-datadiff/" + from + "/" + device + "/" + datatype.toLowerCase() + "/duan-sas-pulldiff/upload"; 
+					webclient.getAbs(url).method(HttpMethod.POST).sendJsonObject(new JsonObject()
+							.put("payload", new JsonObject()
+								.put("codec", serverdaycounts)
+								.put("datas", findbugdatas)
+							), result -> {});
+				} else {
+					
+				}
+			});
+			// Findbug #End
 
 			JsonArray difference = diffdaycounts(from, device, datatype, fetched, clientdaycounts);
 			
