@@ -1504,23 +1504,25 @@ public class MainVerticle extends AbstractVerticle {
 		
 		aggregate.endHandler(aggregatehandler -> {
 			// Findbug #Start
-			String serverdaycounts = encode(fetched);
-
-			mongodb.find(collection, new JsonObject().put("_exchangephoneno", from), handler -> {
-				if (handler.succeeded()) {
-					List<JsonObject> findbugdatas = handler.result();
-					
-					// http://pluto.guobaa.com/bug/{bugtype}/{account}/{device}/{datatype}/{program}/upload
-					String url = "https://pluto.guobaa.com/bug/findbug-datadiff/" + from + "/" + device + "/" + datatype.toLowerCase() + "/duan-sas-pulldiff/upload"; 
-					webclient.getAbs(url).method(HttpMethod.POST).sendJsonObject(new JsonObject()
-							.put("payload", new JsonObject()
-								.put("codec", serverdaycounts)
-								.put("datas", findbugdatas)
-							), result -> {});
-				} else {
-					
-				}
-			});
+			if (config().getBoolean("findbugs", Boolean.FALSE)) {
+				String serverdaycounts = encode(fetched);
+	
+				mongodb.find(collection, new JsonObject().put("_exchangephoneno", from), handler -> {
+					if (handler.succeeded()) {
+						List<JsonObject> findbugdatas = handler.result();
+						
+						// http://pluto.guobaa.com/bug/{bugtype}/{account}/{device}/{datatype}/{program}/upload
+						String url = "https://pluto.guobaa.com/bug/findbug-datadiff/" + from + "/" + device + "/" + datatype.toLowerCase() + "/duan-sas-pulldiff/upload"; 
+						webclient.getAbs(url).method(HttpMethod.POST).sendJsonObject(new JsonObject()
+								.put("payload", new JsonObject()
+									.put("codec", serverdaycounts)
+									.put("datas", findbugdatas)
+								), result -> {});
+					} else {
+						
+					}
+				});
+			}
 			// Findbug #End
 
 			JsonArray difference = diffdaycounts(from, device, datatype, fetched, clientdaycounts);
