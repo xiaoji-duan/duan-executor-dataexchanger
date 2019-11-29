@@ -19,6 +19,7 @@ import io.vertx.core.AbstractVerticle;
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.eventbus.MessageProducer;
@@ -28,7 +29,9 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.ext.mongo.AggregateOptions;
 import io.vertx.ext.mongo.MongoClient;
+import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
+import io.vertx.ext.web.multipart.MultipartForm;
 
 public class MainVerticle extends AbstractVerticle {
 
@@ -1385,8 +1388,8 @@ public class MainVerticle extends AbstractVerticle {
 				if (an != null) {
 					if (an != count) {
 						difference.add(day);
-						nodays.remove(day);
 					}
+					nodays.remove(day);
 					System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + count + "<=>" + an);
 				}
 
@@ -1408,8 +1411,8 @@ public class MainVerticle extends AbstractVerticle {
 				if (o != null) {
 					if (o != count) {
 						difference.add(day);
-						nodays.remove(day);
 					}
+					nodays.remove(day);
 					System.out.println(from + " | " + datatype + " | " + day + " | " + " [Server]<=>[" + device + "] " + o + "<=>" + count);
 				}
 
@@ -1830,12 +1833,13 @@ public class MainVerticle extends AbstractVerticle {
 			// 拉取所有数据(本帐号与本设备差分数据和本设备既存数据)
 			List<String> types = new ArrayList<String>();
 			types.add("Plan");
+			types.add("Grouper");
+			types.add("Memo");
 			types.add("Attachment");
 			types.add("PlanItem");
 			types.add("Agenda");
 			types.add("Task");
 			types.add("MiniTask");
-			types.add("Memo");
 			
 			for (String type : types) {
 				Future<JsonObject> endpointFuture = Future.future();
@@ -1844,7 +1848,7 @@ public class MainVerticle extends AbstractVerticle {
 				pullfull(endpointFuture, from, account, device, type);
 			}
 		} else if (datatype.contains("|")) {
-			List<String> types = Arrays.asList(datatype.split("|"));
+			List<String> types = Arrays.asList(datatype.split("\\|"));
 
 			for (String type : types) {
 				Future<JsonObject> endpointFuture = Future.future();
@@ -1880,63 +1884,91 @@ public class MainVerticle extends AbstractVerticle {
 				}
 				
 				// 数据量大activemq无法承载
-				if (datas.size() > 5) {
-					JsonArray converted = new JsonArray();
-
-					Iterator<Object> itdata = datas.iterator();
-					while (itdata.hasNext()) {
-						JsonObject next = (JsonObject) itdata.next();
-						
-						next.remove("payload");
-						
-						converted.add(next);
-					}
-					
-					datas = converted;
-				}
+				// 使用文件传输方式发送给客户端拉取
+//				if (datas.size() > 5) {
+//					JsonArray converted = new JsonArray();
+//
+//					Iterator<Object> itdata = datas.iterator();
+//					while (itdata.hasNext()) {
+//						JsonObject next = (JsonObject) itdata.next();
+//						
+//						next.remove("payload");
+//						
+//						converted.add(next);
+//					}
+//					
+//					datas = converted;
+//				}
 				
 				// 超过10条分多次返回
 				if (datas != null && datas.size() > 5) {
+					// 使用文件传输方式发送给客户端拉取
+//					Iterator<Object> itdata = datas.iterator();
+//					JsonArray subdatas = new JsonArray();
+//					while (itdata.hasNext()) {
+//						
+//						if (subdatas.size() < 5) {
+//							subdatas.add((JsonObject) itdata.next());
+//						} else {
+//							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
+//									.put("from", from)
+//									.put("header", header)
+//									.put("datas", subdatas));
+//							
+//							MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+//							producer.send(new JsonObject().put("body", nextctx));
+//							producer.end();
+//							
+//							if (config().getBoolean("log.info", Boolean.FALSE)) {
+//								System.out.println(
+//										"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+//							}
+//							
+//							subdatas = new JsonArray();
+//						}
+//					}
+//					
+//					if (subdatas.size() > 0) {
+//						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
+//								.put("from", from)
+//								.put("header", header)
+//								.put("datas", subdatas));
+//						
+//						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+//						producer.send(new JsonObject().put("body", nextctx));
+//						producer.end();
+//						
+//						if (config().getBoolean("log.info", Boolean.FALSE)) {
+//							System.out.println(
+//									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+//						}						
+//					}
+					JsonArray jsondata = new JsonArray();
+					
 					Iterator<Object> itdata = datas.iterator();
-					JsonArray subdatas = new JsonArray();
+
 					while (itdata.hasNext()) {
+						JsonObject subdata = (JsonObject) itdata.next();
+						jsondata.add(new JsonObject()
+								.put("id", subdata.getString("id"))
+								.put("type", subdata.getString("type"))
+								.put("title", subdata.getString("title"))
+								.put("status", subdata.getString("status"))
+								.put("share", subdata.getJsonObject("sharestate", new JsonObject()))
+								.put("data", subdata.getJsonObject("payload"))
+								.put("to", subdata.getJsonArray("to", new JsonArray())));
 						
-						if (subdatas.size() < 5) {
-							subdatas.add((JsonObject) itdata.next());
-						} else {
-							JsonObject nextctx = new JsonObject().put("more", itdata.hasNext()).put("context", new JsonObject()
-									.put("from", from)
-									.put("header", header)
-									.put("datas", subdatas));
+						if (jsondata.size() == 500) {
+							transferFileData(consumer, from, datatype, jsondata, header, nextTask, itdata.hasNext());
 							
-							MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-							producer.send(new JsonObject().put("body", nextctx));
-							producer.end();
-							
-							if (config().getBoolean("log.info", Boolean.FALSE)) {
-								System.out.println(
-										"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
-							}
-							
-							subdatas = new JsonArray();
+							jsondata = new JsonArray();
 						}
 					}
 					
-					if (subdatas.size() > 0) {
-						JsonObject nextctx = new JsonObject().put("more", Boolean.FALSE).put("context", new JsonObject()
-								.put("from", from)
-								.put("header", header)
-								.put("datas", subdatas));
-						
-						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
-						producer.send(new JsonObject().put("body", nextctx));
-						producer.end();
-						
-						if (config().getBoolean("log.info", Boolean.FALSE)) {
-							System.out.println(
-									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
-						}						
+					if (jsondata.size() > 0) {
+						transferFileData(consumer, from, datatype, jsondata, header, nextTask, Boolean.FALSE);
 					}
+					
 				} else {
 					JsonObject nextctx = new JsonObject().put("context", new JsonObject()
 							.put("from", from)
@@ -1972,6 +2004,93 @@ public class MainVerticle extends AbstractVerticle {
 		});
 	}
 
+	private void transferFileData(String consumer, String from, String datatype, JsonArray jsondata, JsonObject header, String nextTask, Boolean hasMore) {
+		System.out.println("Start writing json file.");
+		String dir = config().getString("cached.dir", "/opt/duan/sas/pull");
+		vertx.fileSystem().mkdirsBlocking(dir + "/" + from + "/" + datatype);
+		String filename = System.currentTimeMillis() + ".json";
+		String filepath = dir + "/" + from + "/" + datatype + "/" + filename;
+		System.out.println("writing to " + filepath);
+
+		vertx.fileSystem().writeFile(filepath, jsondata.toBuffer(), write -> {
+			if (write.succeeded()) {
+				System.out.println(filepath + " writed.");
+				MultipartForm form = MultipartForm.create()
+						.attribute("saPrefix", "sas")
+						.attribute("group", "pluto")
+						.attribute("username", "group")
+						.textFileUpload("file", filename, filepath, "application/json");
+//						.binaryFileUpload("file", filename, filepath, filetype);
+				
+				webclient.post(8080, "sa-abl", "/abl/store/remote/upload")
+				.sendMultipartForm(form, ar -> {
+					if (ar.succeeded()) {
+						HttpResponse<Buffer> response = ar.result();
+
+						Integer fileid = response.bodyAsJsonObject().getInteger("data");
+						
+						System.out.println(filepath + " <=> " + fileid + " uploaded.");
+
+						JsonObject nextctx = new JsonObject()
+								.put("more", hasMore)
+								.put("context", new JsonObject()
+									.put("from", from)
+									.put("header", header)
+									.put("datas", new JsonArray()
+											.add(new JsonObject()
+													.put("type", "pullfromfile")
+													.put("file", String.valueOf(fileid))
+													)
+											)
+								);
+						
+						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+						producer.send(new JsonObject().put("body", nextctx));
+						producer.end();
+						
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println(
+									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+						}
+
+					} else {
+						JsonObject nextctx = new JsonObject()
+								.put("more", hasMore)
+								.put("context", new JsonObject()
+									.put("from", from)
+									.put("header", header)
+									.put("datas", new JsonArray()));
+						
+						MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+						producer.send(new JsonObject().put("body", nextctx));
+						producer.end();
+						
+						if (config().getBoolean("log.info", Boolean.FALSE)) {
+							System.out.println(
+									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+						}
+					}
+				});
+			} else {
+				JsonObject nextctx = new JsonObject()
+						.put("more", hasMore)
+						.put("context", new JsonObject()
+							.put("from", from)
+							.put("header", header)
+							.put("datas", new JsonArray()));
+				
+				MessageProducer<JsonObject> producer = bridge.createProducer(nextTask);
+				producer.send(new JsonObject().put("body", nextctx));
+				producer.end();
+				
+				if (config().getBoolean("log.info", Boolean.FALSE)) {
+					System.out.println(
+							"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
+				}
+			}
+		});
+	}
+	
 	private Boolean compareShareStatement(JsonObject statement, String from, String datastate, String invitestate, String todostate, String comparefor) {
 		Boolean changed = Boolean.FALSE;
 		
@@ -2207,5 +2326,4 @@ public class MainVerticle extends AbstractVerticle {
 				}
 			});
 	}
-	
 }
