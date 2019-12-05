@@ -2053,6 +2053,8 @@ public class MainVerticle extends AbstractVerticle {
 									"Consumer " + consumer + " send to [" + nextTask + "] result [" + nextctx.encode() + "(" + nextctx.toBuffer().length() + ")]");
 						}
 
+						// 删除临时文件回收空间
+						vertx.fileSystem().delete(filepath, delete -> {});
 					} else {
 						JsonObject nextctx = new JsonObject()
 								.put("more", hasMore)
@@ -2185,6 +2187,12 @@ public class MainVerticle extends AbstractVerticle {
 			sblogger.append(currentvalue != null? currentvalue.toString() : "null");
 			
 			if (originvalue != null) {
+				if (originvalue instanceof String) {
+					if (currentvalue == null) {
+						currentvalue = "";
+					}
+				}
+				
 				// 两个值不相同
 				if (!originvalue.equals(currentvalue)) {
 					if (config().getBoolean("log.debug", Boolean.FALSE)) {
@@ -2196,11 +2204,22 @@ public class MainVerticle extends AbstractVerticle {
 			} else {
 				// 现在的值不为null
 				if (currentvalue != null) {
-					if (config().getBoolean("log.debug", Boolean.FALSE)) {
-						System.out.println(sblogger.toString());
+					if (currentvalue instanceof String) {
+						if (!"".equals(currentvalue)) {
+							if (config().getBoolean("log.debug", Boolean.FALSE)) {
+								System.out.println(sblogger.toString());
+							}
+							
+							changes.add(fieldname);
+						}
+					} else {
+						if (config().getBoolean("log.debug", Boolean.FALSE)) {
+							System.out.println(sblogger.toString());
+						}
+						
+						changes.add(fieldname);
 					}
-					
-					changes.add(fieldname);
+
 				}
 			}
 		}
