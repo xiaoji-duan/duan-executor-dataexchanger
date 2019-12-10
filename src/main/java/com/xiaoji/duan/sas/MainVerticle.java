@@ -156,9 +156,9 @@ public class MainVerticle extends AbstractVerticle {
 						// 转换数据格式
 						JsonObject converted = new JsonObject();
 						
-						converted.put("exchangeno", data.getString("_exchangephoneno"));
 						converted.put("src", data.getString("_datasrc"));
 						converted.put("id", data.getString("_dataid"));
+						converted.put("timestamp", data.getLong("_clienttimestamp"));
 						converted.put("type", data.getString("_datatype"));
 						converted.put("title", data.getString("_datatitle"));
 						converted.put("datetime", data.getString("_datadatetime"));
@@ -169,8 +169,10 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("security", data.getString("_sharemethod"));
 						converted.put("todostate", data.getString("_todostate"));
 						converted.put("status", data.getString("_datastate"));
-						converted.put("timestamp", data.getLong("_clienttimestamp"));
+						converted.put("checksum", data.getString("_datachecksum"));
+						converted.put("fields", data.getString("_sharefields"));
 						converted.put("payload", data.getJsonObject("payload"));
+						converted.put("exchangeno", data.getString("_exchangephoneno"));
 	
 						outputs.add(converted);
 					}
