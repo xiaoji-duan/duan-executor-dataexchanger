@@ -170,7 +170,7 @@ public class MainVerticle extends AbstractVerticle {
 						converted.put("todostate", data.getString("_todostate"));
 						converted.put("status", data.getString("_datastate"));
 						converted.put("checksum", data.getString("_datachecksum"));
-						converted.put("fields", data.getString("_sharefields"));
+						converted.put("fields", data.getJsonObject("_sharefields"));
 						converted.put("payload", data.getJsonObject("payload"));
 						converted.put("exchangeno", data.getString("_exchangephoneno"));
 	
